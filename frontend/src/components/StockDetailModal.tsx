@@ -7,6 +7,7 @@ import PriceBox from './PriceBox'
 import { formatNumber, formatCurrency } from '../utils/formatters'
 import { PatternSignal } from '../utils/candlestickPatterns'
 import { getStockNews } from '../api/stockNewsApi'
+import axios from 'axios'
 
 interface StockDetailModalProps {
   stock: Stock
