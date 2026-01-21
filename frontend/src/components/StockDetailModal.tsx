@@ -340,7 +340,7 @@ export default function StockDetailModal({ stock, onClose }: StockDetailModalPro
                                   : 'bg-muted text-muted-foreground hover:bg-muted/80'
                               }`}
                             >
-                              {loadingTimeframes.has(tf) ? '...' : tf}
+                              {loadingTimeframes.has(tf) ? '...' : getTimeframeLabel(tf)}
                             </button>
                           ))}
                         </div>
@@ -372,7 +372,7 @@ export default function StockDetailModal({ stock, onClose }: StockDetailModalPro
                                   : 'bg-muted text-muted-foreground hover:bg-muted/80'
                               }`}
                             >
-                              {loadingTimeframes.has(tf) ? '...' : tf}
+                              {loadingTimeframes.has(tf) ? '...' : getTimeframeLabel(tf)}
                             </button>
                           ))}
                         </div>
@@ -404,7 +404,7 @@ export default function StockDetailModal({ stock, onClose }: StockDetailModalPro
                                   : 'bg-muted text-muted-foreground hover:bg-muted/80'
                               }`}
                             >
-                              {loadingTimeframes.has(tf) ? '...' : tf}
+                              {loadingTimeframes.has(tf) ? '...' : getTimeframeLabel(tf)}
                             </button>
                           ))}
                         </div>
