@@ -39,8 +39,8 @@ ALPHAVANTAGE_BASE_URL = 'https://www.alphavantage.co/query'
 ALPHAVANTAGE_FREE_LIMIT = 25  # Daily free tier limit (25 API calls per day)
 
 # Massive.com Configuration (Fourth fallback - high frequency backup)
-MASSIVE_KEY = 'YOUR_MASSIVE_API_KEY'  # Get free key from: https://massive.com
-MASSIVE_BASE_URL = 'https://api.massive.com/v1'  # Placeholder URL
+MASSIVE_KEY = 'B29V_lqg13rHpwpflNgsxBimbiTVHqe9'  # Massive.com API key configured ✅
+MASSIVE_BASE_URL = 'https://api.massive.com/v1'  # Placeholder URL (adjust based on actual API docs)
 MASSIVE_RATE_LIMIT = 5  # Free tier: 5 API calls per minute
 MASSIVE_RATE_WINDOW = 60  # 60 seconds (1 minute)
 
