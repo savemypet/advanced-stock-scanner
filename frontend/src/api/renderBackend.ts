@@ -65,8 +65,7 @@ export async function scanStocks(criteria: ScanCriteria): Promise<ScanResult> {
     criteria.symbols = criteria.symbols.slice(0, 10);
   }
 
-  // Using mutation (supports POST requests)
-  const url = `${RENDER_BACKEND_URL}/stocks.scan`;
+  // Using query (GET request with query parameters)
   const input = {
     symbols: criteria.symbols,
     minPrice: criteria.minPrice ?? 1,
@@ -78,13 +77,10 @@ export async function scanStocks(criteria: ScanCriteria): Promise<ScanResult> {
 
   console.log(`📡 Scanning ${criteria.symbols.length} stocks via Render backend...`);
 
-  // Mutation supports POST requests - tRPC expects input wrapped in { input: {...} }
+  // Query uses GET with input as query parameter
+  const url = `${RENDER_BACKEND_URL}/stocks.scan?input=${encodeURIComponent(JSON.stringify(input))}`;
   const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ input }),
+    method: 'GET',
   });
   if (!response.ok) {
     throw new Error(`Render backend error: ${response.status}`);
@@ -102,19 +98,15 @@ export async function getStockQuote(
   symbol: string,
   timeframe: '1m' | '5m' | '1h' | '24h' = '5m'
 ): Promise<StockData> {
-  // Using mutation (supports POST requests)
-  const url = `${RENDER_BACKEND_URL}/stocks.getQuote`;
+  // Using query (GET request with query parameters)
   const input = { symbol, timeframe };
 
   console.log(`📊 Fetching ${symbol} (${timeframe}) via Render backend...`);
 
-  // Mutation supports POST requests - tRPC expects input wrapped in { input: {...} }
+  // Query uses GET with input as query parameter
+  const url = `${RENDER_BACKEND_URL}/stocks.getQuote?input=${encodeURIComponent(JSON.stringify(input))}`;
   const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ input }),
+    method: 'GET',
   });
   if (!response.ok) {
     throw new Error(`Render backend error: ${response.status}`);
