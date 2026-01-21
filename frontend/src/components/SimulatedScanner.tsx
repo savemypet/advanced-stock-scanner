@@ -297,13 +297,13 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
           // Add candle and remove oldest to maintain count
           const maxCandles = timeframe === '1m' ? 60 : 
                             timeframe === '5m' ? 60 : 
-                            timeframe === '15m' ? 60 : 
+                            timeframe === '15m' ? 60 :
                             timeframe === '30m' ? 60 : 
                             timeframe === '1h' ? 24 : 
                             timeframe === '4h' ? 42 :
                             timeframe === '24h' ? 90 :
                             timeframe === '1week' ? 52 :
-                            timeframe === '1month' ? 12 : 60
+                            timeframe === '1month' ? 30 : 60  // 30 monthly candles = 30 months
           chartData[timeframe] = [...candles.slice(-(maxCandles - 1)), newCandle]
         } else {
           // UPDATE the current candle with new price data

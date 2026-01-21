@@ -26,7 +26,7 @@ export default function StockDetailModal({ stock, onClose }: StockDetailModalPro
   const volumeRatio = (stock.volume / stock.avgVolume).toFixed(2)
   
   // All possible timeframes - let user click any of them
-  const timeframeOrder: ChartTimeframe[] = ['1m', '5m', '1h', '24h']
+  const timeframeOrder: ChartTimeframe[] = ['1m', '5m', '1h', '24h', '1month']
   const availableTimeframes: ChartTimeframe[] = timeframeOrder
   
   // Function to change timeframe for ALL charts at once

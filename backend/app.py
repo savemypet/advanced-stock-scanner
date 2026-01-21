@@ -24,7 +24,8 @@ def generate_synthetic_candles(symbol: str, previous_close: float, current_price
         '1m': (60, 1, 1, 0.003),       # High freq, low volatility
         '5m': (60, 5, 5, 0.008),       # Medium freq, medium volatility
         '1h': (24, 60, 24, 0.02),      # Low freq, higher volatility
-        '24h': (30, 1440, 720, 0.05)   # Very low freq, highest volatility
+        '24h': (30, 1440, 720, 0.05),  # Very low freq, highest volatility
+        '1month': (30, 43200, 21600, 0.08)  # Monthly candles: 30 candles, 30 days each, 6 months lookback
     }
     
     num_candles, interval_mins, lookback_hours, volatility = timeframe_config.get(timeframe, (60, 5, 5, 0.008))
@@ -841,7 +842,8 @@ class StockScanner:
             '15m': '5d',
             '30m': '5d',
             '1h': '1mo',
-            '24h': '3mo'
+            '24h': '3mo',
+            '1month': '2y'  # 2 years to get enough monthly candles
         }
         
         interval_map = {
@@ -851,7 +853,8 @@ class StockScanner:
             '15m': '15m',
             '30m': '30m',
             '1h': '1h',
-            '24h': '1d'
+            '24h': '1d',
+            '1month': '1mo'  # Monthly candles
         }
         
         period = period_map.get(timeframe, '5d')

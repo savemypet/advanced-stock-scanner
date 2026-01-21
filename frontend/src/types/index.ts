@@ -29,6 +29,7 @@ export interface Stock {
     '5m'?: Candle[];
     '1h'?: Candle[];
     '24h'?: Candle[];
+    '1month'?: Candle[];
   };
   volumeProfile?: {
     '1m'?: { buy: number; sell: number };
