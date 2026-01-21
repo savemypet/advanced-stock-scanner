@@ -268,7 +268,21 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
               max="300"
               value={localSettings.updateInterval}
               onChange={(v) => handleChange('updateInterval', parseInt(v) || 20)}
-              helperText="20s = fastest safe with 10 symbols"
+              helperText={(() => {
+                // Calculate recommended based on selected APIs
+                const hasYahoo = localSettings.useYahoo ?? true
+                const hasSerpAPI = localSettings.useSerpAPI ?? false
+                const hasAlphaVantage = localSettings.useAlphaVantage ?? false
+                const hasMassive = localSettings.useMassive ?? false
+                
+                if ((hasMassive || hasAlphaVantage) && !hasYahoo && !hasSerpAPI) {
+                  return "60s recommended (5 calls/min limit)"
+                } else if (hasYahoo || hasSerpAPI) {
+                  return "20s recommended (high quota APIs)"
+                } else {
+                  return "Check API selection for recommended interval"
+                }
+              })()}
               disabled={!localSettings.realTimeUpdates}
             />
           </div>
@@ -305,13 +319,65 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
             <p className="text-xs text-muted-foreground mb-2">
               Choose which APIs to use for stock scanning. At least one must be enabled.
             </p>
+            
+            {/* Calculate recommended wait time based on selected APIs */}
+            {(() => {
+              const selectedApis = []
+              let minWaitTime = Infinity
+              let recommendedInterval = 20 // Default
+              
+              if (localSettings.useYahoo ?? true) {
+                selectedApis.push('Yahoo')
+                minWaitTime = Math.min(minWaitTime, 20) // 20 seconds minimum
+                recommendedInterval = 20 // Yahoo allows 20s scans
+              }
+              if (localSettings.useSerpAPI ?? false) {
+                selectedApis.push('SerpAPI')
+                minWaitTime = Math.min(minWaitTime, 120) // ~2 minutes per call (250/month)
+                if (recommendedInterval < 120) recommendedInterval = 120
+              }
+              if (localSettings.useAlphaVantage ?? false) {
+                selectedApis.push('AlphaVantage')
+                minWaitTime = Math.min(minWaitTime, 12) // 12 seconds (5 calls/min)
+                if (recommendedInterval < 12) recommendedInterval = 12
+              }
+              if (localSettings.useMassive ?? false) {
+                selectedApis.push('Massive.com')
+                minWaitTime = Math.min(minWaitTime, 12) // 12 seconds (5 calls/min)
+                if (recommendedInterval < 12) recommendedInterval = 12
+              }
+              
+              // If only Massive or AlphaVantage, need 60s for 5 stocks
+              if ((localSettings.useMassive || localSettings.useAlphaVantage) && 
+                  !(localSettings.useYahoo ?? true) && !(localSettings.useSerpAPI ?? false)) {
+                recommendedInterval = 60 // 60 seconds for 5 stocks at 5/min
+              }
+              
+              return (
+                <div className="mb-3 px-3 py-2 rounded-lg bg-blue-500/10 border border-blue-500/20">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-medium text-blue-400">Recommended Scan Interval:</span>
+                    <span className="text-xs font-bold text-blue-300">{recommendedInterval}s</span>
+                  </div>
+                  {selectedApis.length > 0 && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Based on: {selectedApis.join(', ')} • Min wait: {minWaitTime}s
+                    </p>
+                  )}
+                </div>
+              )
+            })()}
+            
             <div className="space-y-2">
               <ToggleField
                 label="Yahoo Finance (Recommended)"
                 checked={localSettings.useYahoo ?? true}
                 onChange={(v) => handleChange('useYahoo', v)}
               />
-              <p className="text-xs text-muted-foreground ml-0">Fast, reliable, high quota</p>
+              <div className="flex items-center justify-between ml-0">
+                <p className="text-xs text-muted-foreground">Fast, reliable, high quota</p>
+                <span className="text-xs font-semibold text-green-400">⏱️ 20s wait</span>
+              </div>
             </div>
             <div className="space-y-2">
               <ToggleField
@@ -319,7 +385,10 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
                 checked={localSettings.useSerpAPI ?? false}
                 onChange={(v) => handleChange('useSerpAPI', v)}
               />
-              <p className="text-xs text-muted-foreground ml-0">250 calls/month free tier</p>
+              <div className="flex items-center justify-between ml-0">
+                <p className="text-xs text-muted-foreground">250 calls/month free tier</p>
+                <span className="text-xs font-semibold text-yellow-400">⏱️ 120s wait</span>
+              </div>
             </div>
             <div className="space-y-2">
               <ToggleField
@@ -327,7 +396,10 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
                 checked={localSettings.useAlphaVantage ?? false}
                 onChange={(v) => handleChange('useAlphaVantage', v)}
               />
-              <p className="text-xs text-muted-foreground ml-0">5 calls/minute, 500/day free</p>
+              <div className="flex items-center justify-between ml-0">
+                <p className="text-xs text-muted-foreground">5 calls/minute, 500/day free</p>
+                <span className="text-xs font-semibold text-orange-400">⏱️ 12s wait</span>
+              </div>
             </div>
             <div className="space-y-2">
               <ToggleField
@@ -335,7 +407,10 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
                 checked={localSettings.useMassive ?? false}
                 onChange={(v) => handleChange('useMassive', v)}
               />
-              <p className="text-xs text-muted-foreground ml-0">5 calls/minute rate limit</p>
+              <div className="flex items-center justify-between ml-0">
+                <p className="text-xs text-muted-foreground">5 calls/minute rate limit</p>
+                <span className="text-xs font-semibold text-orange-400">⏱️ 12s wait</span>
+              </div>
             </div>
             {(!localSettings.useYahoo && !localSettings.useSerpAPI && !localSettings.useAlphaVantage && !localSettings.useMassive) && (
               <div className="px-3 py-2 rounded-lg bg-yellow-500/10 border border-yellow-500/20 text-xs text-yellow-600 dark:text-yellow-400">
