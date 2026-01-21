@@ -338,13 +338,13 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
               }
               if (localSettings.useAlphaVantage ?? false) {
                 selectedApis.push('AlphaVantage')
-                minWaitTime = Math.min(minWaitTime, 12) // 12 seconds (5 calls/min)
-                if (recommendedInterval < 12) recommendedInterval = 12
+                minWaitTime = Math.min(minWaitTime, 60) // 60 seconds (5 calls/min = 12s per call, but need 60s for safe scanning)
+                if (recommendedInterval < 60) recommendedInterval = 60
               }
               if (localSettings.useMassive ?? false) {
                 selectedApis.push('Massive.com')
-                minWaitTime = Math.min(minWaitTime, 12) // 12 seconds (5 calls/min)
-                if (recommendedInterval < 12) recommendedInterval = 12
+                minWaitTime = Math.min(minWaitTime, 60) // 60 seconds (5 calls/min = 12s per call, but need 60s for safe scanning)
+                if (recommendedInterval < 60) recommendedInterval = 60
               }
               
               // If only Massive or AlphaVantage, need 60s for 5 stocks
@@ -398,7 +398,7 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
               />
               <div className="flex items-center justify-between ml-0">
                 <p className="text-xs text-muted-foreground">5 calls/minute, 500/day free</p>
-                <span className="text-xs font-semibold text-orange-400">⏱️ 12s wait</span>
+                <span className="text-xs font-semibold text-orange-400">⏱️ 60s wait</span>
               </div>
             </div>
             <div className="space-y-2">
@@ -409,7 +409,7 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
               />
               <div className="flex items-center justify-between ml-0">
                 <p className="text-xs text-muted-foreground">5 calls/minute rate limit</p>
-                <span className="text-xs font-semibold text-orange-400">⏱️ 12s wait</span>
+                <span className="text-xs font-semibold text-orange-400">⏱️ 60s wait</span>
               </div>
             </div>
             {(!localSettings.useYahoo && !localSettings.useSerpAPI && !localSettings.useAlphaVantage && !localSettings.useMassive) && (
