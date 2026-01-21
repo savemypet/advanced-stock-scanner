@@ -1,5 +1,6 @@
 import { Candle } from '../types'
 import { formatCurrency } from '../utils/formatters'
+import { useState, useEffect } from 'react'
 
 interface PriceBoxProps {
   candles: Candle[]
@@ -8,6 +9,30 @@ interface PriceBoxProps {
 }
 
 export default function PriceBox({ candles, currentPrice, height = 500 }: PriceBoxProps) {
+  const [animatedPrice, setAnimatedPrice] = useState(currentPrice)
+  
+  // Animate price changes
+  useEffect(() => {
+    const diff = currentPrice - animatedPrice
+    if (Math.abs(diff) > 0.01) {
+      const steps = 20
+      const stepSize = diff / steps
+      let currentStep = 0
+      
+      const interval = setInterval(() => {
+        currentStep++
+        if (currentStep >= steps) {
+          setAnimatedPrice(currentPrice)
+          clearInterval(interval)
+        } else {
+          setAnimatedPrice(prev => prev + stepSize)
+        }
+      }, 20)
+      
+      return () => clearInterval(interval)
+    }
+  }, [currentPrice])
+  
   // Calculate 24h high and low from candles
   const calculate24hLevels = () => {
     if (!candles || candles.length === 0) {
@@ -41,94 +66,106 @@ export default function PriceBox({ candles, currentPrice, height = 500 }: PriceB
   
   const { high24h, low24h } = calculate24hLevels()
   const priceRange = high24h - low24h
-  const currentPosition = priceRange > 0 
-    ? ((currentPrice - low24h) / priceRange) * 100 
+  const padding = priceRange * 0.05 // 5% padding on top and bottom
+  const totalRange = priceRange + (padding * 2)
+  const minPrice = low24h - padding
+  const maxPrice = high24h + padding
+  
+  // Calculate position of current price (0% = bottom/low, 100% = top/high)
+  const currentPosition = totalRange > 0 
+    ? ((animatedPrice - minPrice) / totalRange) * 100 
     : 50
   
-  const isPositive = currentPrice >= (high24h + low24h) / 2
+  // Calculate position from top (inverted for display)
+  const currentPositionFromTop = 100 - currentPosition
   
   return (
     <div 
-      className="w-full bg-gradient-to-br from-gray-900 to-black rounded-lg border border-gray-800 p-6 flex flex-col items-center justify-center"
+      className="w-full bg-gradient-to-br from-gray-900 to-black rounded-lg border border-gray-800 p-4 flex flex-col"
       style={{ height: `${height}px` }}
     >
-      {/* Current Price - Large Display */}
-      <div className="text-center mb-8">
-        <div className="text-sm text-gray-400 mb-2 font-medium">Current Price</div>
-        <div className={`text-5xl sm:text-6xl font-bold mb-2 ${
-          isPositive ? 'text-green-400' : 'text-red-400'
-        }`}>
-          {formatCurrency(currentPrice)}
-        </div>
-        <div className="text-xs text-gray-500">
-          {new Date().toLocaleTimeString()}
-        </div>
+      {/* Header */}
+      <div className="text-center mb-4">
+        <div className="text-sm font-semibold text-gray-300 mb-1">24 Hour Price Range</div>
+        <div className="text-xs text-gray-500">Price Action</div>
       </div>
       
-      {/* 24h High/Low Box */}
-      <div className="w-full max-w-md bg-gray-800/50 rounded-lg border border-gray-700 p-6 space-y-4">
-        <div className="text-center mb-4">
-          <div className="text-sm font-semibold text-gray-300 mb-1">24 Hour Range</div>
-          <div className="text-xs text-gray-500">High and Low Prices</div>
+      {/* Price Scale Box */}
+      <div className="flex-1 relative bg-gray-800/50 rounded-lg border border-gray-700 overflow-hidden">
+        {/* High - Red at top */}
+        <div 
+          className="absolute left-0 right-0 flex items-center justify-between px-4 py-2 bg-red-500/20 border-b border-red-500/30"
+          style={{ top: 0, height: 'auto' }}
+        >
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-red-500"></div>
+            <span className="text-xs font-medium text-gray-400">24h High</span>
+          </div>
+          <span className="text-lg font-bold text-red-400">
+            {formatCurrency(high24h)}
+          </span>
         </div>
         
-        {/* 24h High */}
-        <div className="flex items-center justify-between p-4 bg-green-500/10 rounded-lg border border-green-500/30">
-          <div className="flex items-center gap-3">
-            <div className="w-3 h-3 rounded-full bg-green-500"></div>
-            <div>
-              <div className="text-xs text-gray-400">24h High</div>
-              <div className="text-xl font-bold text-green-400">
-                {formatCurrency(high24h)}
-              </div>
-            </div>
+        {/* Low - Green at bottom */}
+        <div 
+          className="absolute left-0 right-0 flex items-center justify-between px-4 py-2 bg-green-500/20 border-t border-green-500/30"
+          style={{ bottom: 0, height: 'auto' }}
+        >
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-green-500"></div>
+            <span className="text-xs font-medium text-gray-400">24h Low</span>
           </div>
-          <div className="text-right">
-            <div className="text-xs text-gray-500">+{((high24h - currentPrice) / currentPrice * 100).toFixed(2)}%</div>
-            <div className="text-xs text-gray-500">from current</div>
-          </div>
+          <span className="text-lg font-bold text-green-400">
+            {formatCurrency(low24h)}
+          </span>
         </div>
         
-        {/* Price Range Indicator */}
-        <div className="relative h-3 bg-gray-700 rounded-full overflow-hidden">
-          <div 
-            className="absolute top-0 left-0 h-full bg-gradient-to-r from-red-500 via-yellow-500 to-green-500"
-            style={{ width: '100%' }}
-          />
-          <div 
-            className="absolute top-0 w-1 h-full bg-white shadow-lg z-10"
-            style={{ left: `${currentPosition}%`, transform: 'translateX(-50%)' }}
-          />
-        </div>
-        <div className="text-center text-xs text-gray-400">
-          Current price position in 24h range
-        </div>
-        
-        {/* 24h Low */}
-        <div className="flex items-center justify-between p-4 bg-red-500/10 rounded-lg border border-red-500/30">
-          <div className="flex items-center gap-3">
-            <div className="w-3 h-3 rounded-full bg-red-500"></div>
-            <div>
-              <div className="text-xs text-gray-400">24h Low</div>
-              <div className="text-xl font-bold text-red-400">
-                {formatCurrency(low24h)}
-              </div>
-            </div>
+        {/* White line showing current price - moves with price action */}
+        <div 
+          className="absolute left-0 right-0 flex items-center justify-between px-4 py-2 bg-white/10 border-y border-white/30 z-10 transition-all duration-200"
+          style={{ 
+            top: `${currentPositionFromTop}%`,
+            transform: 'translateY(-50%)',
+            height: 'auto'
+          }}
+        >
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-white"></div>
+            <span className="text-xs font-medium text-gray-300">Current Price</span>
           </div>
-          <div className="text-right">
-            <div className="text-xs text-gray-500">{((low24h - currentPrice) / currentPrice * 100).toFixed(2)}%</div>
-            <div className="text-xs text-gray-500">from current</div>
-          </div>
+          <span className="text-xl font-bold text-white">
+            {formatCurrency(animatedPrice)}
+          </span>
         </div>
         
-        {/* Range Summary */}
-        <div className="pt-4 border-t border-gray-700">
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-gray-400">Range:</span>
-            <span className="text-white font-semibold">
-              {formatCurrency(priceRange)} ({((priceRange / currentPrice) * 100).toFixed(2)}%)
-            </span>
-          </div>
+        {/* White line indicator */}
+        <div 
+          className="absolute left-0 right-0 border-t-2 border-white z-10 transition-all duration-200"
+          style={{ 
+            top: `${currentPositionFromTop}%`,
+            transform: 'translateY(-50%)'
+          }}
+        />
+        
+        {/* Price scale background gradient */}
+        <div 
+          className="absolute inset-0 opacity-20"
+          style={{
+            background: `linear-gradient(to bottom, 
+              rgba(239, 68, 68, 0.3) 0%, 
+              rgba(239, 68, 68, 0.1) 20%,
+              rgba(34, 197, 94, 0.1) 80%,
+              rgba(34, 197, 94, 0.3) 100%)`
+          }}
+        />
+      </div>
+      
+      {/* Footer info */}
+      <div className="mt-4 text-center">
+        <div className="flex items-center justify-center gap-4 text-xs text-gray-500">
+          <span>Range: {formatCurrency(priceRange)}</span>
+          <span>•</span>
+          <span>{((priceRange / currentPrice) * 100).toFixed(2)}%</span>
         </div>
       </div>
     </div>
