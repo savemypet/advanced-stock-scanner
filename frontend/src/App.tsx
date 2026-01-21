@@ -64,7 +64,7 @@ function App() {
         }
       }
       
-      // ALWAYS check backend status on mount to see if fallback API is available
+      // ALWAYS check backend status on mount to see if ANY API is available
       try {
         const testScan = await scanStocks({
           minPrice: 1,
@@ -76,12 +76,22 @@ function App() {
           displayCount: 1
         })
         
-        // If scan succeeded, backend has working API (Yahoo or SerpAPI)
-        if (testScan.apiStatus && !testScan.apiStatus.yahooLocked) {
-          console.log('✅ Backend has working API - clearing frontend lockout')
-          setRateLimited(false)
-          setReadyTime(null)
-          localStorage.removeItem('rateLimitedUntil')
+        // Check if ANY API is available (Massive, Yahoo, SerpAPI, or AlphaVantage)
+        if (testScan.apiStatus) {
+          const massiveAvailable = testScan.apiStatus.massiveRateLimit?.remaining > 0
+          const yahooAvailable = !testScan.apiStatus.yahooLocked
+          const serpapiAvailable = testScan.apiStatus.serpapiQuota?.remaining > 0
+          const alphavantageAvailable = testScan.apiStatus.alphavantageQuota?.remaining > 0
+          const anyApiAvailable = massiveAvailable || yahooAvailable || serpapiAvailable || alphavantageAvailable
+          
+          if (anyApiAvailable) {
+            console.log(`✅ Backend has working API (${testScan.apiStatus.activeSource}) - clearing frontend lockout`)
+            setRateLimited(false)
+            setReadyTime(null)
+            localStorage.removeItem('rateLimitedUntil')
+          } else {
+            console.warn('⚠️ All APIs exhausted on mount')
+          }
         }
       } catch (error) {
         console.log('Backend status check failed:', error)
@@ -141,14 +151,27 @@ function App() {
         })
         
         // Check backend API status and update lockout state
-        if (data.apiStatus) {
-          // Backend is using SerpAPI or Yahoo is unlocked
-          if (!data.apiStatus.yahooLocked || data.apiStatus.serpapiQuota.remaining > 0) {
-            // Clear frontend lockout - backend has fallback working
+        if (result.apiStatus) {
+          // Check if ANY API is available (Massive, Yahoo, SerpAPI, or AlphaVantage)
+          const massiveAvailable = result.apiStatus.massiveRateLimit?.remaining > 0
+          const yahooAvailable = !result.apiStatus.yahooLocked
+          const serpapiAvailable = result.apiStatus.serpapiQuota?.remaining > 0
+          const alphavantageAvailable = result.apiStatus.alphavantageQuota?.remaining > 0
+          const anyApiAvailable = massiveAvailable || yahooAvailable || serpapiAvailable || alphavantageAvailable
+          
+          if (anyApiAvailable) {
+            // Clear frontend lockout - backend has at least one working API
             setRateLimited(false)
             setReadyTime(null)
             localStorage.removeItem('rateLimitedUntil')
-            console.log(`✅ Backend using ${data.apiStatus.activeSource} - Frontend unlocked`)
+            console.log(`✅ Backend using ${result.apiStatus.activeSource} - Frontend unlocked`)
+          } else {
+            // ALL APIs exhausted - show lockout
+            console.warn('⚠️ All APIs exhausted - locking frontend')
+            setRateLimited(true)
+            const readyAt = new Date(Date.now() + 60 * 60 * 1000) // 1 hour
+            setReadyTime(readyAt)
+            localStorage.setItem('rateLimitedUntil', readyAt.toISOString())
           }
         } else {
           // Old API response format - clear rate limit if scan succeeded
@@ -193,19 +216,39 @@ function App() {
       
       // Check if it's a rate limit error
       if (error?.isRateLimit || error?.message?.includes('429') || error?.message?.includes('Too Many Requests') || error?.message?.includes('Rate Limited')) {
-        // Only lock if BOTH Yahoo and SerpAPI failed (true lockout)
-        // If backend has fallback, don't lock frontend
-        setRateLimited(true)
-        const readyAt = new Date(Date.now() + 120 * 60 * 1000) // 2 hours from now
-        setReadyTime(readyAt)
-        
-        // Save rate limit to localStorage
-        localStorage.setItem('rateLimitedUntil', readyAt.toISOString())
-        
-        toast.error('Rate Limit Detected', {
-          description: `⚠️ Backend is switching to fallback API (SerpAPI). Scanner may still work!`,
-          duration: 8000
-        })
+        // Check if error data includes API status
+        if (error?.apiStatus) {
+          const massiveAvailable = error.apiStatus.massiveRateLimit?.remaining > 0
+          const yahooAvailable = !error.apiStatus.yahooLocked
+          const serpapiAvailable = error.apiStatus.serpapiQuota?.remaining > 0
+          const alphavantageAvailable = error.apiStatus.alphavantageQuota?.remaining > 0
+          const anyApiAvailable = massiveAvailable || yahooAvailable || serpapiAvailable || alphavantageAvailable
+          
+          if (anyApiAvailable) {
+            // Fallback API available - don't lock frontend
+            toast.warning('API Switching', {
+              description: `Backend switched to ${error.apiStatus.activeSource}. Scanning continues!`,
+              duration: 5000
+            })
+          } else {
+            // ALL APIs exhausted - lock frontend
+            setRateLimited(true)
+            const readyAt = new Date(Date.now() + 60 * 60 * 1000) // 1 hour
+            setReadyTime(readyAt)
+            localStorage.setItem('rateLimitedUntil', readyAt.toISOString())
+            
+            toast.error('All APIs Exhausted', {
+              description: `All data sources rate-limited. Try again in 1 hour.`,
+              duration: 10000
+            })
+          }
+        } else {
+          // No API status in error - assume temporary lockout
+          toast.warning('Rate Limit Detected', {
+            description: `Backend switching to fallback APIs. Scanner may continue working.`,
+            duration: 5000
+          })
+        }
       } else {
         toast.error('Failed to scan stocks', {
           description: 'Please check your connection and try again'
@@ -369,7 +412,7 @@ function App() {
                 <div className="flex items-center gap-2">
                   <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
                   <span className="text-sm font-semibold text-red-600 dark:text-red-400">
-                    🔒 LOCKED - Yahoo Finance Rate Limit (2 Hour Minimum)
+                    🔒 LOCKED - All APIs Exhausted (Massive, Yahoo, SerpAPI, AlphaVantage)
                   </span>
                 </div>
                 <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2 sm:gap-3">
@@ -392,7 +435,7 @@ function App() {
                 </div>
               </div>
               <div className="text-xs text-red-600 dark:text-red-400 bg-red-500/5 px-3 py-2 rounded border border-red-500/20">
-                ⚠️ <strong>IMPORTANT:</strong> If the timer reaches 0 and you still get blocked, Yahoo's actual limit may be 3-6 hours or even 24 hours for your IP. Wait longer or you'll reset the lockout!
+                ⚠️ <strong>IMPORTANT:</strong> All data sources are exhausted. The scanner will automatically resume when any API quota resets (Massive: 1 min, AlphaVantage: daily, SerpAPI: monthly, Yahoo: varies).
               </div>
             </div>
           </div>
@@ -408,7 +451,7 @@ function App() {
                 <div className="flex items-center gap-2">
                   <div className="w-2 h-2 rounded-full bg-green-500 animate-ping" />
                   <span className="text-sm font-bold text-green-600 dark:text-green-400">
-                    ✅ 2-Hour Timer Complete - Test Carefully!
+                    ✅ API Quota Reset - Scanner Ready!
                   </span>
                 </div>
                 <div className="flex items-center gap-3">
