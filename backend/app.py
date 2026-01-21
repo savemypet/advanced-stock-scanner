@@ -1242,10 +1242,10 @@ def get_market_movers():
                         if movers_type == 'losers' and change_percent > -2:
                             continue
                         
-                        # Generate candles
-                        candles = []
+                        # Generate 5m candles for detailed view
+                        candles_5m = []
                         for idx, row in hist.iterrows():
-                            candles.append({
+                            candles_5m.append({
                                 'time': idx.isoformat(),
                                 'open': round(float(row['Open']), 2),
                                 'high': round(float(row['High']), 2),
@@ -1254,9 +1254,28 @@ def get_market_movers():
                                 'volume': int(row['Volume'])
                             })
                         
+                        # Fetch 24h data for AI study (full day analysis)
+                        candles_24h = []
+                        try:
+                            hist_24h = ticker.history(period='1d', interval='1h')  # 1-hour candles for 24h view
+                            if not hist_24h.empty:
+                                for idx, row in hist_24h.iterrows():
+                                    candles_24h.append({
+                                        'time': idx.isoformat(),
+                                        'open': round(float(row['Open']), 2),
+                                        'high': round(float(row['High']), 2),
+                                        'low': round(float(row['Low']), 2),
+                                        'close': round(float(row['Close']), 2),
+                                        'volume': int(row['Volume'])
+                                    })
+                        except Exception as e:
+                            logging.warning(f"⚠️ Could not fetch 24h data for {symbol}: {e}")
+                        
                         # If no real candles, generate synthetic
-                        if not candles:
-                            candles = generate_synthetic_candles(symbol, previous_close, current_price, '5m')
+                        if not candles_5m:
+                            candles_5m = generate_synthetic_candles(symbol, previous_close, current_price, '5m')
+                        if not candles_24h:
+                            candles_24h = generate_synthetic_candles(symbol, previous_close, current_price, '24h')
                         
                         stocks.append({
                             'symbol': symbol,
@@ -1271,9 +1290,12 @@ def get_market_movers():
                             'dayHigh': float(hist['High'].max()),
                             'dayLow': float(hist['Low'].min()),
                             'openPrice': float(hist['Open'].iloc[0]),
-                            'candles': candles,
-                            'chartData': {'5m': candles},
-                            'source': f'Yahoo Finance Market Movers ({movers_type})',
+                            'candles': candles_24h if candles_24h else candles_5m,  # Use 24h as primary
+                            'chartData': {
+                                '5m': candles_5m,
+                                '24h': candles_24h  # Real 24h data for AI study
+                            },
+                            'source': f'Yahoo Finance Market Movers ({movers_type}) - Real 24h Data',
                             'isHot': abs(change_percent) > 5,
                             'signal': 'BUY' if change_percent > 3 else ('SELL' if change_percent < -3 else 'HOLD')
                         })
