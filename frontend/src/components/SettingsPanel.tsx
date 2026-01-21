@@ -320,47 +320,60 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
               Choose which APIs to use for stock scanning. At least one must be enabled.
             </p>
             
-            {/* Calculate recommended wait time based on selected APIs */}
+            {/* Calculate recommended wait time and stock count based on selected APIs */}
             {(() => {
               const selectedApis = []
               let minWaitTime = Infinity
               let recommendedInterval = 20 // Default
+              let maxStocks = 10 // Default
               
               if (localSettings.useYahoo ?? true) {
                 selectedApis.push('Yahoo')
                 minWaitTime = Math.min(minWaitTime, 20) // 20 seconds minimum
                 recommendedInterval = 20 // Yahoo allows 20s scans
+                maxStocks = 10 // Yahoo allows 10 stocks per scan
               }
               if (localSettings.useSerpAPI ?? false) {
                 selectedApis.push('SerpAPI')
                 minWaitTime = Math.min(minWaitTime, 120) // ~2 minutes per call (250/month)
                 if (recommendedInterval < 120) recommendedInterval = 120
+                maxStocks = Math.min(maxStocks, 10) // SerpAPI: 5-10 stocks recommended
               }
               if (localSettings.useAlphaVantage ?? false) {
                 selectedApis.push('AlphaVantage')
                 minWaitTime = Math.min(minWaitTime, 60) // 60 seconds (5 calls/min = 12s per call, but need 60s for safe scanning)
                 if (recommendedInterval < 60) recommendedInterval = 60
+                maxStocks = Math.min(maxStocks, 5) // AlphaVantage: 5 stocks max (5 calls/min)
               }
               if (localSettings.useMassive ?? false) {
                 selectedApis.push('Massive.com')
                 minWaitTime = Math.min(minWaitTime, 60) // 60 seconds (5 calls/min = 12s per call, but need 60s for safe scanning)
                 if (recommendedInterval < 60) recommendedInterval = 60
+                maxStocks = Math.min(maxStocks, 5) // Massive.com: 5 stocks max (5 calls/min)
               }
               
               // If only Massive or AlphaVantage, need 60s for 5 stocks
               if ((localSettings.useMassive || localSettings.useAlphaVantage) && 
                   !(localSettings.useYahoo ?? true) && !(localSettings.useSerpAPI ?? false)) {
                 recommendedInterval = 60 // 60 seconds for 5 stocks at 5/min
+                maxStocks = 5
               }
               
               return (
                 <div className="mb-3 px-3 py-2 rounded-lg bg-blue-500/10 border border-blue-500/20">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-medium text-blue-400">Recommended Settings:</span>
+                  </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-medium text-blue-400">Recommended Scan Interval:</span>
-                    <span className="text-xs font-bold text-blue-300">{recommendedInterval}s</span>
+                    <span className="text-xs text-muted-foreground">Max Stocks:</span>
+                    <span className="text-xs font-bold text-blue-300">📊 {maxStocks} stocks</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-muted-foreground">Scan Interval:</span>
+                    <span className="text-xs font-bold text-blue-300">⏱️ {recommendedInterval}s</span>
                   </div>
                   {selectedApis.length > 0 && (
-                    <p className="text-xs text-muted-foreground mt-1">
+                    <p className="text-xs text-muted-foreground mt-1 pt-1 border-t border-blue-500/20">
                       Based on: {selectedApis.join(', ')} • Min wait: {minWaitTime}s
                     </p>
                   )}
@@ -376,7 +389,10 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
               />
               <div className="flex items-center justify-between ml-0">
                 <p className="text-xs text-muted-foreground">Fast, reliable, high quota</p>
-                <span className="text-xs font-semibold text-green-400">⏱️ 20s wait</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-blue-400">📊 10 stocks</span>
+                  <span className="text-xs font-semibold text-green-400">⏱️ 20s</span>
+                </div>
               </div>
             </div>
             <div className="space-y-2">
@@ -387,7 +403,10 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
               />
               <div className="flex items-center justify-between ml-0">
                 <p className="text-xs text-muted-foreground">250 calls/month free tier</p>
-                <span className="text-xs font-semibold text-yellow-400">⏱️ 120s wait</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-blue-400">📊 5-10 stocks</span>
+                  <span className="text-xs font-semibold text-yellow-400">⏱️ 120s</span>
+                </div>
               </div>
             </div>
             <div className="space-y-2">
@@ -398,7 +417,10 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
               />
               <div className="flex items-center justify-between ml-0">
                 <p className="text-xs text-muted-foreground">5 calls/minute, 500/day free</p>
-                <span className="text-xs font-semibold text-orange-400">⏱️ 60s wait</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-blue-400">📊 5 stocks max</span>
+                  <span className="text-xs font-semibold text-orange-400">⏱️ 60s</span>
+                </div>
               </div>
             </div>
             <div className="space-y-2">
@@ -409,7 +431,10 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
               />
               <div className="flex items-center justify-between ml-0">
                 <p className="text-xs text-muted-foreground">5 calls/minute rate limit</p>
-                <span className="text-xs font-semibold text-orange-400">⏱️ 60s wait</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-blue-400">📊 5 stocks max</span>
+                  <span className="text-xs font-semibold text-orange-400">⏱️ 60s</span>
+                </div>
               </div>
             </div>
             {(!localSettings.useYahoo && !localSettings.useSerpAPI && !localSettings.useAlphaVantage && !localSettings.useMassive) && (
