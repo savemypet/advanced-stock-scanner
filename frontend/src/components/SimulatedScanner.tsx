@@ -926,6 +926,50 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
         </div>
       )}
 
+      {/* Tickers Being Studied */}
+      {simulatedStocks.length > 0 && (
+        <div className="bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-blue-500/20 rounded-lg p-4">
+          <div className="flex items-center gap-3 mb-3">
+            <span className="text-sm font-semibold text-blue-300">🧠 AI Studying Tickers:</span>
+            <span className="text-xs text-muted-foreground">
+              {simulatedStocks.length} {simulatedStocks.length === 1 ? 'stock' : 'stocks'}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {simulatedStocks.map((stock, index) => (
+              <div
+                key={stock.symbol || index}
+                className="flex items-center gap-2 px-3 py-1.5 bg-blue-500/20 border border-blue-500/30 rounded-lg hover:bg-blue-500/30 transition-colors cursor-pointer"
+                onClick={() => handleStockClick(stock)}
+              >
+                <span className="text-sm font-bold text-blue-200">{stock.symbol}</span>
+                {stock.detectedPattern && (
+                  <span className={`text-xs px-1.5 py-0.5 rounded ${
+                    stock.detectedPattern.signal === 'BUY'
+                      ? 'bg-green-500/30 text-green-300'
+                      : stock.detectedPattern.signal === 'SELL'
+                      ? 'bg-red-500/30 text-red-300'
+                      : 'bg-gray-500/30 text-gray-300'
+                  }`}>
+                    {stock.detectedPattern.signal}
+                  </span>
+                )}
+                {stock.changePercent !== undefined && (
+                  <span className={`text-xs font-medium ${
+                    stock.changePercent >= 0 ? 'text-green-400' : 'text-red-400'
+                  }`}>
+                    {stock.changePercent >= 0 ? '+' : ''}{stock.changePercent.toFixed(2)}%
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 text-xs text-muted-foreground">
+            💡 Click any ticker to view detailed charts and pattern analysis
+          </div>
+        </div>
+      )}
+
       {/* Stock List */}
       <div className="space-y-3">
         <h3 className="text-lg font-semibold text-foreground">
