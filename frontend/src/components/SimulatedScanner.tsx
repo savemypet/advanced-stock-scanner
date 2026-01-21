@@ -4,55 +4,25 @@ import StockCard from './StockCard'
 import StockDetailModal from './StockDetailModal'
 import { RefreshCw } from 'lucide-react'
 import { detectPatterns, getLatestSignal } from '../utils/candlestickPatterns'
-import { getStock } from '../api/stockApi'
 
-export default function SimulatedScanner() {
+interface SimulatedScannerProps {
+  liveStocks?: Stock[]
+}
+
+export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerProps) {
   const [selectedStock, setSelectedStock] = useState<Stock | null>(null)
-  const [simulatedStocks, setSimulatedStocks] = useState<Stock[]>(generateSimulatedStocks())
+  const [simulatedStocks, setSimulatedStocks] = useState<Stock[]>(
+    liveStocks.length > 0 ? liveStocks : generateSimulatedStocks()
+  )
   const [isLiveMode, setIsLiveMode] = useState(true)
-  const [realDataFetched, setRealDataFetched] = useState(false)
 
-  // Fetch REAL stock data on mount to teach the simulation
+  // Update simulated stocks when live stocks change
   useEffect(() => {
-    const fetchRealDataForLearning = async () => {
-      if (realDataFetched) return
-      
-      console.log('🧠 AI Learning: Fetching real stock data to teach simulation...')
-      
-      // Fetch real data for popular stocks to teach the simulation
-      const symbolsToLearn = ['TSLA', 'AMD', 'PLTR', 'SOFI', 'HOOD']
-      
-      try {
-        for (const symbol of symbolsToLearn) {
-          try {
-            const realStock = await getStock(symbol, '5m')
-            if (realStock && realStock.chartData) {
-              console.log(`✅ Learned from ${symbol}: ${realStock.changePercent}% change`)
-              
-              // Use real data to update simulation parameters
-              setSimulatedStocks(prevStocks => prevStocks.map(stock => {
-                // Blend real patterns into simulation
-                if (stock.chartData && realStock.chartData['5m']) {
-                  // Copy real volatility patterns
-                  const realVolatility = calculateVolatility(realStock.chartData['5m'])
-                  stock.volatility = realVolatility
-                }
-                return stock
-              }))
-            }
-          } catch (err) {
-            console.log(`⚠️ Could not fetch ${symbol} for learning (API might be locked)`)
-          }
-        }
-        setRealDataFetched(true)
-        console.log('🎓 AI Learning complete! Simulation enhanced with real market patterns')
-      } catch (error) {
-        console.error('Error fetching real data for learning:', error)
-      }
+    if (liveStocks && liveStocks.length > 0) {
+      console.log(`📊 Simulated Demo: Using ${liveStocks.length} stocks from Live Scanner`)
+      setSimulatedStocks(liveStocks)
     }
-    
-    fetchRealDataForLearning()
-  }, [realDataFetched])
+  }, [liveStocks])
 
   // Real-time updates - update every 3 seconds for visible demo movement
   useEffect(() => {
@@ -71,18 +41,6 @@ export default function SimulatedScanner() {
 
     return () => clearInterval(interval)
   }, [isLiveMode])
-  
-  function calculateVolatility(candles: Candle[]): number {
-    if (!candles || candles.length < 2) return 0.02
-    
-    const changes = []
-    for (let i = 1; i < Math.min(candles.length, 20); i++) {
-      const change = Math.abs((candles[i].close - candles[i-1].close) / candles[i-1].close)
-      changes.push(change)
-    }
-    
-    return changes.reduce((sum, val) => sum + val, 0) / changes.length || 0.02
-  }
 
   type MovementPattern = 'uptrend' | 'downtrend' | 'breakout' | 'breakdown' | 'consolidation' | 'volatile' | 'pullback' | 'reversal'
 
@@ -751,9 +709,11 @@ export default function SimulatedScanner() {
               )}
             </h2>
             <p className="text-sm text-muted-foreground mt-1">
-              {isLiveMode 
-                ? '📡 Live updating every minute - watch the charts move in real-time!'
-                : 'Click any stock to see Bookmap-style volume charts'
+              {liveStocks && liveStocks.length > 0 
+                ? '📡 Showing stocks from your Live Scanner - watch charts update in real-time!'
+                : (isLiveMode 
+                  ? '🎮 Interactive demo with simulated data - test all features!'
+                  : 'Click any stock to see Bookmap-style volume charts')
               }
             </p>
           </div>
@@ -838,14 +798,32 @@ export default function SimulatedScanner() {
 
       {/* Stock List */}
       <div className="space-y-3">
-        <h3 className="text-lg font-semibold text-foreground">Demo Stocks:</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {simulatedStocks.map((stock) => (
-            <div key={stock.symbol} onClick={() => handleStockClick(stock)}>
-              <StockCard stock={stock} />
-            </div>
-          ))}
-        </div>
+        <h3 className="text-lg font-semibold text-foreground">
+          {liveStocks && liveStocks.length > 0 
+            ? `Stocks from Live Scanner (${simulatedStocks.length}):` 
+            : 'Demo Stocks:'}
+        </h3>
+        
+        {simulatedStocks.length === 0 && liveStocks && liveStocks.length === 0 ? (
+          <div className="bg-muted/50 border border-border rounded-lg p-8 text-center">
+            <div className="text-4xl mb-3">📡</div>
+            <h3 className="text-lg font-semibold mb-2">No Stocks Scanned Yet</h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              Click <strong>"📡 Live Scanner"</strong> above, then click <strong>"Start"</strong> or <strong>"Refresh"</strong> to scan for stocks.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              The stocks you find will appear here in the demo with live updates and all 3 chart types!
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {simulatedStocks.map((stock) => (
+              <div key={stock.symbol} onClick={() => handleStockClick(stock)}>
+                <StockCard stock={stock} />
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Stock Detail Modal */}

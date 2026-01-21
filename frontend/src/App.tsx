@@ -569,7 +569,7 @@ function App() {
           {/* Scanner Results */}
           <div className="flex-1 min-w-0">
             {viewMode === 'simulated' ? (
-              <SimulatedScanner />
+              <SimulatedScanner liveStocks={stocks} />
             ) : (
               <StockScanner 
                 stocks={stocks} 
