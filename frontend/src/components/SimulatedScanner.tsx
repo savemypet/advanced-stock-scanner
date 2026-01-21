@@ -3,6 +3,7 @@ import { Stock, Candle } from '../types'
 import StockCard from './StockCard'
 import StockDetailModal from './StockDetailModal'
 import { RefreshCw } from 'lucide-react'
+import { detectPatterns, getLatestSignal } from '../utils/candlestickPatterns'
 
 export default function SimulatedScanner() {
   const [selectedStock, setSelectedStock] = useState<Stock | null>(null)
@@ -37,7 +38,26 @@ export default function SimulatedScanner() {
     const pattern = stock.pattern || 'uptrend'
     const currentPrice = stock.price
     
-    // Get realistic price change based on pattern
+    // Check for candlestick patterns in recent chart data
+    let detectedPattern: any = null
+    let patternBoost = 0
+    
+    if (stock.chartData && stock.chartData['5m']) {
+      const recentCandles = stock.chartData['5m'].slice(-10) // Last 10 candles
+      const patterns = detectPatterns(recentCandles)
+      detectedPattern = patterns.length > 0 ? patterns[patterns.length - 1] : null
+      
+      // If a HIGH confidence pattern was detected, boost the trend
+      if (detectedPattern) {
+        if (detectedPattern.confidence === 'HIGH') {
+          patternBoost = detectedPattern.signal === 'BUY' ? 0.005 : -0.005
+        } else if (detectedPattern.confidence === 'MEDIUM') {
+          patternBoost = detectedPattern.signal === 'BUY' ? 0.003 : -0.003
+        }
+      }
+    }
+    
+    // Get realistic price change based on pattern + detected candlestick patterns
     let trend = 0
     let volatility = 0.008
     
@@ -76,6 +96,9 @@ export default function SimulatedScanner() {
         break
     }
     
+    // Apply pattern boost from candlestick analysis
+    trend += patternBoost
+    
     const randomNoise = (Math.random() - 0.5) * volatility * 0.5
     const change = trend + randomNoise
     const newPrice = Math.max(0.01, currentPrice * (1 + change))
@@ -87,18 +110,29 @@ export default function SimulatedScanner() {
     const newHigh = Math.max(stock.high, newPrice * (1 + Math.random() * 0.01))
     const newLow = Math.min(stock.low, newPrice * (1 - Math.random() * 0.01))
     
-    // Volume increases with volatility
+    // Volume increases with volatility AND pattern detection
     const priceMove = Math.abs(newPrice - currentPrice) / currentPrice
-    const volumeIncrease = Math.floor(stock.avgVolume * (0.8 + priceMove * 100) * (0.5 + Math.random()))
+    const patternVolumeBoost = detectedPattern && detectedPattern.confidence === 'HIGH' ? 1.5 : 1.0
+    const volumeIncrease = Math.floor(stock.avgVolume * (0.8 + priceMove * 100) * (0.5 + Math.random()) * patternVolumeBoost)
     const newVolume = stock.volume + volumeIncrease
     const volumeMultiplier = newVolume / stock.avgVolume
     
-    // Update signal
+    // Update signal using AI pattern detection
     let signal: 'BUY' | 'SELL' | 'HOLD' = 'HOLD'
-    if (changePercent > 10 && volumeMultiplier > 1.5) {
+    
+    // Priority 1: Use detected candlestick pattern signal if HIGH confidence
+    if (detectedPattern && detectedPattern.confidence === 'HIGH') {
+      signal = detectedPattern.signal
+    }
+    // Priority 2: Use price action + volume
+    else if (changePercent > 10 && volumeMultiplier > 1.5) {
       signal = 'BUY'
     } else if (changePercent < -5 || volumeMultiplier < 0.7) {
       signal = 'SELL'
+    }
+    // Priority 3: Use MEDIUM confidence patterns as backup
+    else if (detectedPattern && detectedPattern.confidence === 'MEDIUM') {
+      signal = detectedPattern.signal
     }
     
     // Update chart data if exists
@@ -175,7 +209,13 @@ export default function SimulatedScanner() {
       changeAmount: changeFromOpen,
       signal,
       updatedAt: Date.now(),
-      chartData
+      chartData,
+      detectedPattern: detectedPattern ? {
+        name: detectedPattern.pattern,
+        signal: detectedPattern.signal,
+        confidence: detectedPattern.confidence,
+        description: detectedPattern.description
+      } : null
     }
   }
 
@@ -185,7 +225,7 @@ export default function SimulatedScanner() {
     return [
       {
         symbol: 'DEMO-BREAKOUT',
-        name: 'Breakout Pattern → Explosive Move',
+        name: '🧠 AI Learning: Bullish Engulfing → Breakout',
         price: 4.82,
         open: 3.15,
         high: 5.10,
@@ -205,7 +245,7 @@ export default function SimulatedScanner() {
       },
       {
         symbol: 'DEMO-BREAKDOWN',
-        name: 'Breakdown → Sharp Drop',
+        name: '🧠 AI Learning: Shooting Star → Sell Signal',
         price: 0.68,
         open: 0.95,
         high: 0.98,
@@ -224,7 +264,7 @@ export default function SimulatedScanner() {
       },
       {
         symbol: 'DEMO-UPTREND',
-        name: 'Steady Uptrend → Higher Highs',
+        name: '🧠 AI Learning: Three White Soldiers → Rally',
         price: 2.45,
         open: 1.85,
         high: 2.55,
@@ -244,7 +284,7 @@ export default function SimulatedScanner() {
       },
       {
         symbol: 'DEMO-PULLBACK',
-        name: 'Rally → Healthy Pullback',
+        name: '🧠 AI Learning: Hammer Pattern → Reversal',
         price: 3.67,
         open: 3.20,
         high: 3.85,
@@ -264,7 +304,7 @@ export default function SimulatedScanner() {
       },
       {
         symbol: 'DEMO-REVERSAL',
-        name: 'Downtrend → Bullish Reversal',
+        name: '🧠 AI Learning: Morning Star → Bullish Turn',
         price: 0.18,
         open: 0.08,
         high: 0.22,
@@ -284,7 +324,7 @@ export default function SimulatedScanner() {
       },
       {
         symbol: 'DEMO-CONSOL',
-        name: 'Tight Consolidation → Coiling',
+        name: '🧠 AI Learning: Doji Pattern → Indecision',
         price: 1.23,
         open: 1.20,
         high: 1.28,
@@ -303,7 +343,7 @@ export default function SimulatedScanner() {
       },
       {
         symbol: 'DEMO-VOLATILE',
-        name: 'High Volatility → Erratic Swings',
+        name: '🧠 AI Learning: Spinning Top → Volatility',
         price: 1.52,
         open: 1.45,
         high: 1.78,
@@ -323,7 +363,7 @@ export default function SimulatedScanner() {
       },
       {
         symbol: 'DEMO-DOWNTREND',
-        name: 'Bearish Downtrend → Lower Lows',
+        name: '🧠 AI Learning: Three Black Crows → Decline',
         price: 0.92,
         open: 1.15,
         high: 1.18,
@@ -389,17 +429,29 @@ export default function SimulatedScanner() {
       let volatility = 0.008
       let volumeMultiplier = 1
       
+      // Decide whether to inject a specific candlestick pattern (20% chance)
+      const shouldInjectPattern = Math.random() < 0.2 && i >= 3
+      let injectedPatternType: string | null = null
+      
       switch (pattern) {
         case 'uptrend':
           trend = 0.003 + (progress * 0.002)
           volatility = 0.01
           volumeMultiplier = 1 + (progress * 0.5)
+          // Inject bullish patterns during uptrends
+          if (shouldInjectPattern && progress > 0.3) {
+            injectedPatternType = ['HAMMER', 'BULLISH_ENGULFING', 'MORNING_STAR'][Math.floor(Math.random() * 3)]
+          }
           break
           
         case 'downtrend':
           trend = -0.003 - (progress * 0.001)
           volatility = 0.012
           volumeMultiplier = 1 + (progress * 0.3)
+          // Inject bearish patterns during downtrends
+          if (shouldInjectPattern && progress > 0.3) {
+            injectedPatternType = ['SHOOTING_STAR', 'BEARISH_ENGULFING', 'EVENING_STAR'][Math.floor(Math.random() * 3)]
+          }
           break
           
         case 'breakout':
@@ -407,10 +459,18 @@ export default function SimulatedScanner() {
             trend = (Math.random() - 0.5) * 0.001
             volatility = 0.005
             volumeMultiplier = 0.8
+            // Consolidation patterns before breakout
+            if (shouldInjectPattern) {
+              injectedPatternType = 'DOJI'
+            }
           } else {
             trend = 0.008 + (progress - 0.6) * 0.01
             volatility = 0.015
             volumeMultiplier = 2 + (progress - 0.6) * 3
+            // Strong bullish patterns during breakout
+            if (shouldInjectPattern) {
+              injectedPatternType = ['THREE_WHITE_SOLDIERS', 'BULLISH_KICKER'][Math.floor(Math.random() * 2)]
+            }
           }
           break
           
@@ -423,6 +483,10 @@ export default function SimulatedScanner() {
             trend = -0.01 - (progress - 0.5) * 0.008
             volatility = 0.018
             volumeMultiplier = 1.5 + (progress - 0.5) * 2
+            // Strong bearish patterns during breakdown
+            if (shouldInjectPattern) {
+              injectedPatternType = ['THREE_BLACK_CROWS', 'BEARISH_KICKER'][Math.floor(Math.random() * 2)]
+            }
           }
           break
           
@@ -430,6 +494,10 @@ export default function SimulatedScanner() {
           trend = (Math.random() - 0.5) * 0.0015
           volatility = 0.004 + Math.sin(progress * Math.PI * 4) * 0.002
           volumeMultiplier = 0.7 + Math.random() * 0.3
+          // Indecision patterns during consolidation
+          if (shouldInjectPattern) {
+            injectedPatternType = ['DOJI', 'SPINNING_TOP'][Math.floor(Math.random() * 2)]
+          }
           break
           
         case 'volatile':
@@ -459,18 +527,101 @@ export default function SimulatedScanner() {
             trend = 0.005 + (progress - 0.5) * 0.003
             volatility = 0.015
             volumeMultiplier = 1.5 + (progress - 0.5) * 1.5
+            // Reversal patterns at the turning point
+            if (shouldInjectPattern && progress > 0.45 && progress < 0.55) {
+              injectedPatternType = ['MORNING_STAR', 'BULLISH_ABANDONED_BABY'][Math.floor(Math.random() * 2)]
+            }
           }
           break
       }
       
-      const open = currentPrice
-      const randomNoise = (Math.random() - 0.5) * volatility * 0.5
-      const change = trend + randomNoise
-      const close = open * (1 + change)
+      let open = currentPrice
+      let close: number
+      let high: number
+      let low: number
       
-      const wickSize = volatility * (0.3 + Math.random() * 0.7)
-      const high = Math.max(open, close) * (1 + wickSize)
-      const low = Math.min(open, close) * (1 - wickSize)
+      // Create specific patterns when injected
+      if (injectedPatternType && i >= 1) {
+        const prevCandle = candles[i - 1]
+        
+        switch (injectedPatternType) {
+          case 'HAMMER':
+            // Bullish hammer: long lower wick, small upper wick
+            open = currentPrice
+            close = currentPrice * (1 + 0.005)
+            const hammerBody = Math.abs(close - open)
+            low = Math.min(open, close) - (hammerBody * 2.5)
+            high = Math.max(open, close) * (1 + 0.002)
+            break
+            
+          case 'SHOOTING_STAR':
+            // Bearish shooting star: long upper wick, small lower wick
+            open = currentPrice
+            close = currentPrice * (1 - 0.005)
+            const starBody = Math.abs(close - open)
+            high = Math.max(open, close) + (starBody * 2.5)
+            low = Math.min(open, close) * (1 - 0.002)
+            break
+            
+          case 'BULLISH_ENGULFING':
+            // Large green candle engulfing previous red
+            if (prevCandle && prevCandle.close < prevCandle.open) {
+              open = prevCandle.close * 0.99
+              close = prevCandle.open * 1.02
+              high = close * 1.01
+              low = open * 0.99
+            } else {
+              open = currentPrice
+              close = currentPrice * 1.015
+              high = close * 1.01
+              low = open * 0.99
+            }
+            break
+            
+          case 'BEARISH_ENGULFING':
+            // Large red candle engulfing previous green
+            if (prevCandle && prevCandle.close > prevCandle.open) {
+              open = prevCandle.close * 1.01
+              close = prevCandle.open * 0.98
+              high = open * 1.01
+              low = close * 0.99
+            } else {
+              open = currentPrice
+              close = currentPrice * 0.985
+              high = open * 1.01
+              low = close * 0.99
+            }
+            break
+            
+          case 'DOJI':
+            // Very small body, equal wicks
+            open = currentPrice
+            close = currentPrice * (1 + (Math.random() - 0.5) * 0.002)
+            high = Math.max(open, close) * 1.01
+            low = Math.min(open, close) * 0.99
+            break
+            
+          default:
+            // Normal candle
+            const randomNoise = (Math.random() - 0.5) * volatility * 0.5
+            const change = trend + randomNoise
+            open = currentPrice
+            close = open * (1 + change)
+            const wickSize = volatility * (0.3 + Math.random() * 0.7)
+            high = Math.max(open, close) * (1 + wickSize)
+            low = Math.min(open, close) * (1 - wickSize)
+        }
+      } else {
+        // Normal candle generation
+        const randomNoise = (Math.random() - 0.5) * volatility * 0.5
+        const change = trend + randomNoise
+        open = currentPrice
+        close = open * (1 + change)
+        
+        const wickSize = volatility * (0.3 + Math.random() * 0.7)
+        high = Math.max(open, close) * (1 + wickSize)
+        low = Math.min(open, close) * (1 - wickSize)
+      }
       
       const priceMove = Math.abs(close - open) / open
       const volumeBoost = 1 + (priceMove * 50)
@@ -574,20 +725,28 @@ export default function SimulatedScanner() {
       </div>
 
       {/* Info Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div className="bg-gradient-to-br from-blue-500/10 to-purple-500/10 border border-blue-500/30 rounded-lg p-3">
+          <div className="text-xs text-blue-300 mb-1">🧠 AI Pattern Recognition</div>
+          <div className="text-sm font-semibold text-blue-200">36+ Patterns</div>
+          <div className="text-xs text-blue-300/70 mt-1">
+            Hammer • Engulfing • Morning Star • Doji
+          </div>
+        </div>
+        
         <div className="bg-card border border-border rounded-lg p-3">
-          <div className="text-xs text-muted-foreground mb-1">📊 Features Demo</div>
-          <div className="text-sm font-semibold">Bookmap Volume</div>
+          <div className="text-xs text-muted-foreground mb-1">📊 Smart Signals</div>
+          <div className="text-sm font-semibold">Pattern → Action</div>
           <div className="text-xs text-muted-foreground mt-1">
-            ✅ Buy/Sell Split • ✅ VWAP • ✅ Delta
+            AI detects patterns & predicts moves
           </div>
         </div>
         
         <div className="bg-card border border-border rounded-lg p-3">
           <div className="text-xs text-muted-foreground mb-1">🎯 Test Scenarios</div>
-          <div className="text-sm font-semibold">6 Stock Patterns</div>
+          <div className="text-sm font-semibold">8 Stock Patterns</div>
           <div className="text-xs text-muted-foreground mt-1">
-            Bullish • Bearish • High Vol • Consolidation
+            Bullish • Bearish • Volatile • Reversal
           </div>
         </div>
         
@@ -600,10 +759,26 @@ export default function SimulatedScanner() {
             Auto-Updating
           </div>
           <div className="text-xs text-muted-foreground mt-1">
-            {isLiveMode ? 'Updates every 3 seconds - charts show proper timeframe intervals' : 'Paused - click Live to resume'}
+            {isLiveMode ? 'AI learns from live patterns' : 'Paused - click Live to resume'}
           </div>
         </div>
       </div>
+
+      {/* AI Learning Indicator */}
+      {isLiveMode && (
+        <div className="bg-gradient-to-r from-green-500/10 via-blue-500/10 to-purple-500/10 border border-green-500/20 rounded-lg p-4">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
+              <span className="text-sm font-semibold text-green-300">AI Pattern Learning Active</span>
+            </div>
+            <div className="flex-1 text-xs text-muted-foreground">
+              The simulation generates realistic candlestick patterns (Hammer, Engulfing, Morning Star, etc.) and the AI detects them in real-time to predict price movements. 
+              Watch the signals change as patterns form! 📈🧠
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Stock List */}
       <div className="space-y-3">
