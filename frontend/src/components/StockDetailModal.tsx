@@ -308,7 +308,7 @@ export default function StockDetailModal({ stock, onClose }: StockDetailModalPro
                 <h3 className="text-lg font-semibold text-foreground">
                   {fullscreenChart === 'bookmap' && '📊 Bookmap - Buy/Sell Pressure'}
                   {fullscreenChart === 'candlestick' && '🕯️ Candlestick Chart'}
-                  {fullscreenChart === 'tradingview' && '📈 TradingView Style - Ichimoku Cloud'}
+                  {fullscreenChart === 'pricebox' && '💰 Price Information'}
                 </h3>
                 <button
                   onClick={() => setFullscreenChart('none')}
