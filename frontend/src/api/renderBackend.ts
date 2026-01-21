@@ -78,13 +78,13 @@ export async function scanStocks(criteria: ScanCriteria): Promise<ScanResult> {
 
   console.log(`📡 Scanning ${criteria.symbols.length} stocks via Render backend...`);
 
-  // Mutation supports POST requests - input goes directly in body (not wrapped)
+  // Mutation supports POST requests - tRPC expects input wrapped in { input: {...} }
   const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify(input),
+    body: JSON.stringify({ input }),
   });
   if (!response.ok) {
     throw new Error(`Render backend error: ${response.status}`);
@@ -108,13 +108,13 @@ export async function getStockQuote(
 
   console.log(`📊 Fetching ${symbol} (${timeframe}) via Render backend...`);
 
-  // Mutation supports POST requests - input goes directly in body (not wrapped)
+  // Mutation supports POST requests - tRPC expects input wrapped in { input: {...} }
   const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify(input),
+    body: JSON.stringify({ input }),
   });
   if (!response.ok) {
     throw new Error(`Render backend error: ${response.status}`);
