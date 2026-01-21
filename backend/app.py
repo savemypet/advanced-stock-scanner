@@ -33,7 +33,12 @@ SERPAPI_KEY = '76b777fb92f33e02aeff118d208fa182414297f1249715b1d262571a82ec245c'
 SERPAPI_BASE_URL = 'https://serpapi.com/search'
 SERPAPI_FREE_LIMIT = 250  # Monthly free tier limit
 
-# Smart API switching - automatically rotates between Yahoo and SerpAPI
+# AlphaVantage Configuration (Third fallback when SerpAPI exhausted)
+ALPHAVANTAGE_KEY = 'YOUR_ALPHAVANTAGE_API_KEY'  # Get free key from: https://www.alphavantage.co/support/#api-key
+ALPHAVANTAGE_BASE_URL = 'https://www.alphavantage.co/query'
+ALPHAVANTAGE_FREE_LIMIT = 500  # Daily free tier limit (25 calls/day standard, 500 with free key)
+
+# Smart API switching - automatically rotates between Yahoo, SerpAPI, and AlphaVantage
 use_yahoo_locked = False  # Yahoo Finance locked status
 yahoo_locked_until = None  # When Yahoo unlocks
 proxy_calls_used = 0  # Track monthly usage (not used anymore)
@@ -41,6 +46,10 @@ proxy_calls_reset_date = None  # Reset counter monthly
 
 # Smart fallback system (AUTO SWITCH)
 FORCE_SERPAPI_MODE = False  # Let system auto-choose based on availability
+
+# AlphaVantage usage tracking
+alphavantage_calls_used = 0  # Track daily usage
+alphavantage_calls_reset_date = None  # Reset counter daily
 
 # SerpAPI tracking
 use_serpapi_mode = False  # Switch to True when Yahoo + ScraperAPI both fail
@@ -128,6 +137,17 @@ def should_use_serpapi() -> bool:
     # Check if SerpAPI quota exhausted
     if serpapi_calls_used >= SERPAPI_FREE_LIMIT:
         logging.warning(f"⚠️ SerpAPI quota exhausted ({serpapi_calls_used}/{SERPAPI_FREE_LIMIT})")
+        return False
+    
+    return True
+
+def should_use_alphavantage() -> bool:
+    """Check if we should use AlphaVantage (has quota remaining)"""
+    global alphavantage_calls_used
+    
+    # Check if AlphaVantage quota exhausted
+    if alphavantage_calls_used >= ALPHAVANTAGE_FREE_LIMIT:
+        logging.warning(f"⚠️ AlphaVantage quota exhausted ({alphavantage_calls_used}/{ALPHAVANTAGE_FREE_LIMIT})")
         return False
     
     return True
@@ -313,6 +333,102 @@ def fetch_stock_from_serpapi(symbol: str) -> Dict[str, Any]:
         logging.error(f"❌ SerpAPI fetch failed for {symbol}: {str(e)}")
         return None
 
+def fetch_stock_from_alphavantage(symbol: str) -> Dict[str, Any]:
+    """Fetch stock data from AlphaVantage as third fallback"""
+    track_alphavantage_usage()
+    
+    if ALPHAVANTAGE_KEY == 'YOUR_ALPHAVANTAGE_API_KEY':
+        logging.error("❌ AlphaVantage key not configured! Get free key from https://www.alphavantage.co/support/#api-key")
+        return None
+    
+    try:
+        logging.info(f"🔍 Fetching {symbol} from AlphaVantage...")
+        
+        # Fetch quote data (GLOBAL_QUOTE function)
+        quote_params = {
+            'function': 'GLOBAL_QUOTE',
+            'symbol': symbol,
+            'apikey': ALPHAVANTAGE_KEY
+        }
+        
+        quote_response = requests.get(ALPHAVANTAGE_BASE_URL, params=quote_params, timeout=10)
+        quote_response.raise_for_status()
+        quote_data = quote_response.json()
+        
+        if 'Global Quote' not in quote_data or not quote_data['Global Quote']:
+            logging.warning(f"⚠️ AlphaVantage returned no quote data for {symbol}")
+            return None
+        
+        quote = quote_data['Global Quote']
+        
+        # Extract data
+        current_price = float(quote.get('05. price', 0))
+        previous_close = float(quote.get('08. previous close', current_price))
+        open_price = float(quote.get('02. open', current_price))
+        day_high = float(quote.get('03. high', current_price))
+        day_low = float(quote.get('04. low', current_price))
+        volume = int(quote.get('06. volume', 1000000))
+        
+        change_amount = float(quote.get('09. change', 0))
+        change_percent_str = quote.get('10. change percent', '0%')
+        change_percent = float(change_percent_str.replace('%', ''))
+        
+        logging.info(f"✅ Successfully fetched {symbol} from AlphaVantage: ${current_price} ({change_percent:+.2f}%)")
+        
+        # Generate synthetic candles (AlphaVantage free tier has strict rate limits for intraday data)
+        logging.info(f"📊 Generating synthetic candles for {symbol} (saving AlphaVantage intraday quota)")
+        candles = []
+        base_time = datetime.now() - timedelta(hours=5)
+        for i in range(60):
+            progress = i / 60.0
+            price = previous_close + (change_amount * progress)
+            candles.append({
+                'time': (base_time + timedelta(minutes=i*5)).isoformat(),
+                'open': price,
+                'high': price * 1.005,
+                'low': price * 0.995,
+                'close': price,
+                'volume': volume // 60
+            })
+        
+        return {
+            'symbol': symbol,
+            'name': symbol,  # AlphaVantage doesn't provide company name in basic quote
+            'currentPrice': round(current_price, 2),
+            'previousClose': round(previous_close, 2),
+            'openPrice': round(open_price, 2),
+            'dayHigh': round(day_high, 2),
+            'dayLow': round(day_low, 2),
+            'volume': volume,
+            'avgVolume': volume,  # Estimate
+            'float': 10_000_000,  # Placeholder - AlphaVantage doesn't provide float
+            'changePercent': round(change_percent, 2),
+            'changeAmount': round(change_amount, 2),
+            'candles': candles,
+            'chartData': {'5m': candles},
+            'lastUpdated': datetime.now().isoformat(),
+            'dataSource': 'AlphaVantage'
+        }
+        
+    except Exception as e:
+        logging.error(f"❌ AlphaVantage error for {symbol}: {str(e)}")
+        return None
+
+def track_alphavantage_usage():
+    """Track AlphaVantage API usage (resets daily)"""
+    global alphavantage_calls_used, alphavantage_calls_reset_date
+    
+    # Check if we need to reset the counter (daily reset)
+    today = datetime.now().date()
+    if alphavantage_calls_reset_date is None or alphavantage_calls_reset_date < today:
+        alphavantage_calls_used = 0
+        alphavantage_calls_reset_date = today
+        logging.info(f"📊 AlphaVantage usage reset for {today.strftime('%B %d, %Y')}")
+    
+    alphavantage_calls_used += 1
+    remaining = ALPHAVANTAGE_FREE_LIMIT - alphavantage_calls_used
+    logging.info(f"🔍 AlphaVantage call #{alphavantage_calls_used}/{ALPHAVANTAGE_FREE_LIMIT} today ({remaining} remaining)")
+
 def fetch_news_for_stock(symbol: str) -> List[Dict[str, Any]]:
     """Fetch today's news for a specific stock from Finnhub"""
     global finnhub_api_calls_today
@@ -490,13 +606,28 @@ class StockScanner:
                         logging.info(f"✅ Successfully fetched {symbol} from SerpAPI")
                         return serpapi_data
                     else:
-                        logging.warning(f"⚠️ SerpAPI returned no data for {symbol}")
+                        logging.warning(f"⚠️ SerpAPI returned no data for {symbol}, trying AlphaVantage...")
+                        # Fall through to AlphaVantage
+                except Exception as e:
+                    logging.error(f"❌ SerpAPI failed for {symbol}: {str(e)}, trying AlphaVantage...")
+                    # Fall through to AlphaVantage
+            
+            # Priority 3: Try AlphaVantage (if SerpAPI exhausted/failed, and AlphaVantage has quota)
+            if should_use_alphavantage():
+                logging.info(f"🌐 Using AlphaVantage for {symbol} (Yahoo locked: {use_yahoo_locked}, SerpAPI: {serpapi_calls_used}/{SERPAPI_FREE_LIMIT})")
+                try:
+                    alphavantage_data = fetch_stock_from_alphavantage(symbol)
+                    if alphavantage_data:
+                        logging.info(f"✅ Successfully fetched {symbol} from AlphaVantage")
+                        return alphavantage_data
+                    else:
+                        logging.warning(f"⚠️ AlphaVantage returned no data for {symbol}")
                         return None
                 except Exception as e:
-                    logging.error(f"❌ SerpAPI failed for {symbol}: {str(e)}")
+                    logging.error(f"❌ AlphaVantage failed for {symbol}: {str(e)}")
                     return None
             else:
-                logging.error(f"❌ Both Yahoo (locked) and SerpAPI (quota exhausted) unavailable for {symbol}")
+                logging.error(f"❌ All APIs unavailable for {symbol}: Yahoo (locked), SerpAPI ({serpapi_calls_used}/{SERPAPI_FREE_LIMIT}), AlphaVantage ({alphavantage_calls_used}/{ALPHAVANTAGE_FREE_LIMIT})")
                 return None
                 
         except Exception as e:
@@ -713,6 +844,17 @@ def scan_stocks():
         # Include smart API switching status
         yahoo_available = should_use_yahoo()
         serpapi_available = should_use_serpapi()
+        alphavantage_available = should_use_alphavantage()
+        
+        # Determine active source
+        if yahoo_available:
+            active_source = 'Yahoo Finance'
+        elif serpapi_available:
+            active_source = 'SerpAPI'
+        elif alphavantage_available:
+            active_source = 'AlphaVantage'
+        else:
+            active_source = 'None (all exhausted)'
         
         api_status = {
             'yahooLocked': use_yahoo_locked,
@@ -722,8 +864,13 @@ def scan_stocks():
                 'limit': SERPAPI_FREE_LIMIT,
                 'remaining': SERPAPI_FREE_LIMIT - serpapi_calls_used
             },
-            'activeSource': 'SerpAPI' if not yahoo_available and serpapi_available else 'Yahoo Finance',
-            'fallbackAvailable': serpapi_available if yahoo_available else yahoo_available
+            'alphavantageQuota': {
+                'used': alphavantage_calls_used,
+                'limit': ALPHAVANTAGE_FREE_LIMIT,
+                'remaining': ALPHAVANTAGE_FREE_LIMIT - alphavantage_calls_used
+            },
+            'activeSource': active_source,
+            'fallbackAvailable': serpapi_available or alphavantage_available
         }
         
         return jsonify({
