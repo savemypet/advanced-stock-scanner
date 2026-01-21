@@ -1,6 +1,6 @@
 import { Stock, ChartTimeframe } from '../types'
 import { TrendingUp, TrendingDown, Activity, BarChart3, Newspaper } from 'lucide-react'
-import TradingViewChart from './TradingViewChart'
+import PriceBox from './PriceBox'
 import { formatNumber, formatCurrency } from '../utils/formatters'
 
 interface StockCardProps {
@@ -113,16 +113,20 @@ export default function StockCard({ stock, timeframe, onClick }: StockCardProps)
         />
       </div>
 
-      {/* Chart */}
+      {/* Price Information */}
       <div className="mt-3 sm:mt-4">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-2 gap-1">
-          <span className="text-xs sm:text-sm font-medium">Chart ({timeframe}) - Click for details</span>
+          <span className="text-xs sm:text-sm font-medium">Price Info - Click for details</span>
           <span className="text-xs text-muted-foreground">
             {new Date(stock.lastUpdated).toLocaleTimeString()}
           </span>
         </div>
         <div className="rounded-lg overflow-hidden border border-border/50">
-          <TradingViewChart candles={stock.candles} height={280} />
+          <PriceBox 
+            candles={stock.candles} 
+            currentPrice={stock.currentPrice}
+            height={280} 
+          />
         </div>
       </div>
     </div>

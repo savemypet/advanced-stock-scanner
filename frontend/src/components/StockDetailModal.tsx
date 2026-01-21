@@ -16,7 +16,7 @@ interface StockDetailModalProps {
 export default function StockDetailModal({ stock, onClose }: StockDetailModalProps) {
   // UNIFIED TIMEFRAME - Controls all 3 charts simultaneously
   const [activeTimeframe, setActiveTimeframe] = useState<ChartTimeframe>('5m')
-  const [fullscreenChart, setFullscreenChart] = useState<'none' | 'bookmap' | 'candlestick' | 'tradingview'>('none')
+  const [fullscreenChart, setFullscreenChart] = useState<'none' | 'bookmap' | 'candlestick' | 'pricebox'>('none')
   const [news, setNews] = useState<NewsItem[]>([])
   const [newsLoading, setNewsLoading] = useState(false)
   const [candlestickPattern, setCandlestickPattern] = useState<PatternSignal | null>(null)
@@ -384,35 +384,13 @@ export default function StockDetailModal({ stock, onClose }: StockDetailModalPro
                   </div>
                 )}
                 
-                {fullscreenChart === 'tradingview' && (
+                {fullscreenChart === 'pricebox' && (
                   <div className="h-full">
-                    {/* TradingView Timeframe Selector */}
-                    {stock.chartData && availableTimeframes.length > 1 && (
-                      <div className="flex items-center gap-2 mb-4">
-                        <span className="text-sm font-medium text-muted-foreground">Timeframe:</span>
-                        <div className="flex gap-2">
-                          {availableTimeframes.map((tf) => (
-                            <button
-                              key={tf}
-                              onClick={() => changeTimeframe(tf)}
-                              disabled={loadingTimeframes.has(tf)}
-                              className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${
-                                activeTimeframe === tf
-                                  ? 'bg-primary text-primary-foreground'
-                                  : loadingTimeframes.has(tf)
-                                  ? 'bg-muted/50 text-muted-foreground/50 cursor-wait'
-                                  : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                              }`}
-                            >
-                              {loadingTimeframes.has(tf) ? '...' : getTimeframeLabel(tf)}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    <div className="h-[calc(100%-60px)]">
-                      <TradingViewChart candles={currentCandles} height={window.innerHeight - 200} />
-                    </div>
+                    <PriceBox 
+                      candles={currentCandles} 
+                      currentPrice={stock.currentPrice}
+                      height={window.innerHeight - 200} 
+                    />
                   </div>
                 )}
               </div>
@@ -573,65 +551,25 @@ export default function StockDetailModal({ stock, onClose }: StockDetailModalPro
               </div>
             </div>
 
-            {/* TradingView Style Chart */}
+            {/* Price Information Box */}
             <div 
-              className="bg-[#0a0a0a] rounded-lg p-4 border border-border/50 cursor-pointer hover:border-primary/50 transition-all"
-              onClick={() => setFullscreenChart('tradingview')}
+              className="bg-gradient-to-br from-gray-900 to-black rounded-lg p-4 border border-border/50 cursor-pointer hover:border-primary/50 transition-all"
+              onClick={() => setFullscreenChart('pricebox')}
             >
               <div className="mb-3">
                 <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-sm font-semibold text-foreground">📈 TradingView Style</h3>
-                  <div className="flex items-center gap-2">
-                    <div className="flex items-center gap-2 text-xs">
-                      <div className="flex items-center gap-1">
-                        <div className="w-3 h-0.5 bg-green-500/40"></div>
-                        <span className="text-muted-foreground">Cloud</span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <div className="w-2 h-2 rounded bg-red-500"></div>
-                        <span className="text-muted-foreground">SELL</span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <div className="w-2 h-2 rounded bg-green-500"></div>
-                        <span className="text-muted-foreground">BUY</span>
-                      </div>
-                    </div>
-                    <span className="text-xs text-muted-foreground px-2 py-1 bg-muted/50 rounded">
-                      Click to fullscreen
-                    </span>
-                  </div>
+                  <h3 className="text-sm font-semibold text-foreground">💰 Price Information</h3>
+                  <span className="text-xs text-muted-foreground px-2 py-1 bg-muted/50 rounded">
+                    Click to fullscreen
+                  </span>
                 </div>
-                
-                {/* TradingView Timeframe Selector */}
-                {stock.chartData && availableTimeframes.length > 1 && (
-                  <div className="flex items-center gap-2 mb-3" onClick={(e) => e.stopPropagation()}>
-                    <span className="text-xs font-medium text-muted-foreground">Timeframe:</span>
-                    <div className="flex gap-1">
-                      {availableTimeframes.map((tf) => (
-                        <button
-                          key={tf}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            changeTimeframe(tf)
-                          }}
-                          disabled={loadingTimeframes.has(tf)}
-                          className={`px-3 py-1 rounded-lg font-medium text-xs transition-all ${
-                            activeTimeframe === tf
-                              ? 'bg-primary text-primary-foreground'
-                              : loadingTimeframes.has(tf)
-                              ? 'bg-muted/50 text-muted-foreground/50 cursor-wait'
-                              : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                          }`}
-                        >
-                          {loadingTimeframes.has(tf) ? '...' : tf}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </div>
               <div onClick={(e) => e.stopPropagation()}>
-                <TradingViewChart candles={currentCandles} height={500} />
+                <PriceBox 
+                  candles={currentCandles} 
+                  currentPrice={stock.currentPrice}
+                  height={500} 
+                />
               </div>
             </div>
 
@@ -641,7 +579,7 @@ export default function StockDetailModal({ stock, onClose }: StockDetailModalPro
           {stock.chartData && availableTimeframes.length > 1 && (
             <div className="mt-3 text-center">
               <span className="text-xs text-muted-foreground">
-                ✅ No API calls - All three charts switch timeframes instantly
+                ✅ No API calls - Charts switch timeframes instantly
               </span>
             </div>
           )}
