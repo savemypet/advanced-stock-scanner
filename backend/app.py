@@ -28,11 +28,21 @@ SCRAPERAPI_KEY = 'd787516e0bbe1264e92e43db77a12244'  # ScraperAPI key configured
 SCRAPERAPI_BASE_URL = 'http://api.scraperapi.com'
 SCRAPERAPI_FREE_LIMIT = 1000  # Monthly free tier limit
 
+# SerpAPI Configuration (Alternative data source when Yahoo is blocked)
+SERPAPI_KEY = 'YOUR_SERPAPI_KEY'  # Get free key from https://serpapi.com (100 searches/month free)
+SERPAPI_BASE_URL = 'https://serpapi.com/search'
+SERPAPI_FREE_LIMIT = 100  # Monthly free tier limit
+
 # Proxy mode tracking
 use_proxy_mode = False  # Switch to True when Yahoo blocks us
 proxy_mode_until = None  # Timestamp when to switch back to direct
 proxy_calls_used = 0  # Track monthly usage
 proxy_calls_reset_date = None  # Reset counter monthly
+
+# SerpAPI tracking
+use_serpapi_mode = False  # Switch to True when Yahoo + ScraperAPI both fail
+serpapi_calls_used = 0  # Track monthly usage
+serpapi_calls_reset_date = None  # Reset counter monthly
 
 # In-memory cache for stock data and news
 stock_cache = {}
@@ -134,6 +144,115 @@ def fetch_with_scraperapi(url: str) -> requests.Response:
     response = requests.get(proxy_url, timeout=30)
     
     return response
+
+def track_serpapi_usage():
+    """Track SerpAPI usage (100/month free limit)"""
+    global serpapi_calls_used, serpapi_calls_reset_date
+    
+    # Reset counter on new month
+    now = datetime.now()
+    if serpapi_calls_reset_date is None or now.month != serpapi_calls_reset_date.month:
+        serpapi_calls_used = 0
+        serpapi_calls_reset_date = now
+        logging.info(f"📊 SerpAPI usage reset for {now.strftime('%B %Y')}")
+    
+    serpapi_calls_used += 1
+    remaining = SERPAPI_FREE_LIMIT - serpapi_calls_used
+    
+    if serpapi_calls_used <= SERPAPI_FREE_LIMIT:
+        logging.info(f"🔍 SerpAPI call #{serpapi_calls_used}/100 this month ({remaining} remaining)")
+    else:
+        logging.error(f"⚠️ SerpAPI FREE limit exceeded! {serpapi_calls_used}/100 used this month")
+
+def fetch_stock_from_serpapi(symbol: str) -> Dict[str, Any]:
+    """Fetch stock data from SerpAPI Google Finance as ultimate fallback"""
+    track_serpapi_usage()
+    
+    if SERPAPI_KEY == 'YOUR_SERPAPI_KEY':
+        logging.error("❌ SerpAPI key not configured! Get free key from https://serpapi.com")
+        raise Exception("SerpAPI key not configured")
+    
+    try:
+        # SerpAPI Google Finance endpoint
+        params = {
+            'engine': 'google_finance',
+            'q': f'{symbol}:NASDAQ',  # Try NASDAQ first
+            'api_key': SERPAPI_KEY,
+            'hl': 'en'
+        }
+        
+        logging.info(f"🔍 Fetching {symbol} from SerpAPI Google Finance...")
+        response = requests.get(SERPAPI_BASE_URL, params=params, timeout=30)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            # Extract summary data
+            summary = data.get('summary', {})
+            graph_data = data.get('graph', [])
+            
+            if not summary or not graph_data:
+                logging.warning(f"⚠️ SerpAPI returned incomplete data for {symbol}")
+                return None
+            
+            # Parse current price
+            current_price_str = summary.get('price', '0')
+            current_price = float(current_price_str.replace('$', '').replace(',', ''))
+            
+            # Parse previous close
+            prev_close_str = summary.get('previous_close', '0')
+            previous_close = float(prev_close_str.replace('$', '').replace(',', ''))
+            
+            # Calculate change
+            change_amount = current_price - previous_close
+            change_percent = (change_amount / previous_close) * 100 if previous_close > 0 else 0
+            
+            # Build candle data from graph
+            candles = []
+            for point in graph_data[-60:]:  # Last 60 data points
+                candles.append({
+                    'time': point.get('date', datetime.now().isoformat()),
+                    'open': float(point.get('price', current_price)),
+                    'high': float(point.get('price', current_price)) * 1.01,  # Estimate
+                    'low': float(point.get('price', current_price)) * 0.99,  # Estimate
+                    'close': float(point.get('price', current_price)),
+                    'volume': 1000000  # SerpAPI doesn't provide volume, use placeholder
+                })
+            
+            stock_data = {
+                'symbol': symbol,
+                'name': summary.get('title', symbol),
+                'currentPrice': current_price,
+                'previousClose': previous_close,
+                'openPrice': previous_close,  # Estimate
+                'dayHigh': current_price * 1.02,  # Estimate
+                'dayLow': current_price * 0.98,  # Estimate
+                'volume': 5000000,  # Placeholder
+                'avgVolume': 3000000,  # Placeholder
+                'changeAmount': change_amount,
+                'changePercent': change_percent,
+                'float': 50000000,  # Placeholder
+                'marketCap': current_price * 50000000,
+                'candles': candles,
+                'chartData': {'5m': candles},  # Limited data from SerpAPI
+                'lastUpdated': datetime.now().isoformat(),
+                'signal': 'BUY' if change_percent > 5 else 'HOLD',
+                'dataSource': 'SerpAPI'  # Tag data source
+            }
+            
+            logging.info(f"✅ Successfully fetched {symbol} from SerpAPI: ${current_price} ({change_percent:+.2f}%)")
+            return stock_data
+            
+        elif response.status_code == 429:
+            logging.error(f"🔴 SerpAPI rate limit exceeded!")
+            return None
+        else:
+            logging.error(f"⚠️ SerpAPI error: Status {response.status_code}")
+            return None
+            
+    except Exception as e:
+        logging.error(f"❌ SerpAPI fetch failed for {symbol}: {str(e)}")
+        return None
 
 def fetch_news_for_stock(symbol: str) -> List[Dict[str, Any]]:
     """Fetch today's news for a specific stock from Finnhub"""
@@ -408,6 +527,16 @@ class StockScanner:
                 if not should_use_proxy():
                     logging.warning(f"🚨 Rate limit detected for {symbol}!")
                     enable_proxy_mode()
+                
+                # Try SerpAPI as ultimate fallback
+                logging.warning(f"🔍 Attempting SerpAPI fallback for {symbol}...")
+                try:
+                    serpapi_data = fetch_stock_from_serpapi(symbol)
+                    if serpapi_data:
+                        logging.info(f"✅ Successfully fetched {symbol} from SerpAPI fallback")
+                        return serpapi_data
+                except Exception as serpapi_error:
+                    logging.error(f"❌ SerpAPI fallback also failed for {symbol}: {str(serpapi_error)}")
                 
                 raise Exception("RATE_LIMIT_ERROR: Yahoo Finance is rate limiting requests")
             
