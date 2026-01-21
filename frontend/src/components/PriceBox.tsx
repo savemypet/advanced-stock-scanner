@@ -1,6 +1,7 @@
 import { Candle } from '../types'
 import { formatCurrency } from '../utils/formatters'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
+import { detectPatterns, getLatestSignal, PatternSignal } from '../utils/candlestickPatterns'
 
 interface PriceBoxProps {
   candles: Candle[]
@@ -78,6 +79,59 @@ export default function PriceBox({ candles, currentPrice, height = 500 }: PriceB
   
   // Calculate position from top (inverted for display)
   const currentPositionFromTop = 100 - currentPosition
+  
+  // AI Pattern Detection and Recommendations
+  const aiRecommendation = useMemo(() => {
+    if (!candles || candles.length === 0) return null
+    
+    const latestSignal = getLatestSignal(candles)
+    if (!latestSignal || (latestSignal.confidence !== 'HIGH' && latestSignal.confidence !== 'MEDIUM')) {
+      return null
+    }
+    
+    const signalCandle = candles[latestSignal.candleIndex]
+    if (!signalCandle) return null
+    
+    // Calculate recommended prices
+    let recommendedPrice: number
+    let priceReason: string
+    
+    if (latestSignal.signal === 'BUY') {
+      // For BUY: recommend entry at current low or slightly below for better entry
+      recommendedPrice = Math.min(currentPrice, signalCandle.low)
+      // If price is near low, suggest buying now, otherwise suggest waiting for pullback
+      if (currentPrice <= signalCandle.low * 1.01) {
+        recommendedPrice = currentPrice
+        priceReason = 'Buy now at current price'
+      } else {
+        recommendedPrice = signalCandle.low * 0.998 // Slightly below low for better entry
+        priceReason = `Buy on pullback to ${formatCurrency(recommendedPrice)}`
+      }
+    } else {
+      // For SELL: recommend exit at current high or slightly above for better exit
+      recommendedPrice = Math.max(currentPrice, signalCandle.high)
+      // If price is near high, suggest selling now, otherwise suggest waiting for rally
+      if (currentPrice >= signalCandle.high * 0.99) {
+        recommendedPrice = currentPrice
+        priceReason = 'Sell now at current price'
+      } else {
+        recommendedPrice = signalCandle.high * 1.002 // Slightly above high for better exit
+        priceReason = `Sell on rally to ${formatCurrency(recommendedPrice)}`
+      }
+    }
+    
+    return {
+      signal: latestSignal.signal,
+      confidence: latestSignal.confidence,
+      pattern: latestSignal.pattern,
+      description: latestSignal.description,
+      recommendedPrice,
+      priceReason,
+      priceDifference: latestSignal.signal === 'BUY' 
+        ? ((recommendedPrice - currentPrice) / currentPrice * 100)
+        : ((currentPrice - recommendedPrice) / currentPrice * 100)
+    }
+  }, [candles, currentPrice])
   
   return (
     <div 
@@ -160,6 +214,68 @@ export default function PriceBox({ candles, currentPrice, height = 500 }: PriceB
         />
       </div>
       
+      {/* AI Recommendation Box */}
+      {aiRecommendation && (
+        <div className={`mt-4 p-4 rounded-lg border-2 ${
+          aiRecommendation.signal === 'BUY'
+            ? 'bg-green-500/10 border-green-500/50'
+            : 'bg-red-500/10 border-red-500/50'
+        }`}>
+          <div className="flex items-start justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <span className="text-lg">🤖</span>
+              <div>
+                <div className={`text-sm font-bold ${
+                  aiRecommendation.signal === 'BUY' ? 'text-green-400' : 'text-red-400'
+                }`}>
+                  AI {aiRecommendation.signal} Signal
+                </div>
+                <div className="text-xs text-gray-400">
+                  {aiRecommendation.pattern.replace(/_/g, ' ')} • {aiRecommendation.confidence} Confidence
+                </div>
+              </div>
+            </div>
+            <div className={`px-2 py-1 rounded text-xs font-bold ${
+              aiRecommendation.confidence === 'HIGH'
+                ? aiRecommendation.signal === 'BUY' ? 'bg-green-500/30 text-green-300' : 'bg-red-500/30 text-red-300'
+                : 'bg-yellow-500/30 text-yellow-300'
+            }`}>
+              {aiRecommendation.confidence}
+            </div>
+          </div>
+          
+          <div className="mt-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-gray-400">Recommended {aiRecommendation.signal} Price:</span>
+              <span className={`text-lg font-bold ${
+                aiRecommendation.signal === 'BUY' ? 'text-green-400' : 'text-red-400'
+              }`}>
+                {formatCurrency(aiRecommendation.recommendedPrice)}
+              </span>
+            </div>
+            
+            <div className="text-xs text-gray-300 bg-gray-800/50 p-2 rounded">
+              {aiRecommendation.priceReason}
+            </div>
+            
+            {Math.abs(aiRecommendation.priceDifference) > 0.1 && (
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-gray-400">
+                  {aiRecommendation.signal === 'BUY' ? 'Below' : 'Above'} current:
+                </span>
+                <span className={aiRecommendation.signal === 'BUY' ? 'text-green-400' : 'text-red-400'}>
+                  {aiRecommendation.priceDifference > 0 ? '+' : ''}{aiRecommendation.priceDifference.toFixed(2)}%
+                </span>
+              </div>
+            )}
+            
+            <div className="text-xs text-gray-500 italic mt-2 pt-2 border-t border-gray-700">
+              {aiRecommendation.description}
+            </div>
+          </div>
+        </div>
+      )}
+      
       {/* Footer info */}
       <div className="mt-4 text-center">
         <div className="flex items-center justify-center gap-4 text-xs text-gray-500">
@@ -167,6 +283,11 @@ export default function PriceBox({ candles, currentPrice, height = 500 }: PriceB
           <span>•</span>
           <span>{((priceRange / currentPrice) * 100).toFixed(2)}%</span>
         </div>
+        {!aiRecommendation && (
+          <div className="mt-2 text-xs text-gray-600">
+            Analyzing patterns... No strong signal detected yet
+          </div>
+        )}
       </div>
     </div>
   )
