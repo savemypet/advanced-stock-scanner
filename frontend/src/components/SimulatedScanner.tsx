@@ -4,11 +4,55 @@ import StockCard from './StockCard'
 import StockDetailModal from './StockDetailModal'
 import { RefreshCw } from 'lucide-react'
 import { detectPatterns, getLatestSignal } from '../utils/candlestickPatterns'
+import { getStock } from '../api/stockApi'
 
 export default function SimulatedScanner() {
   const [selectedStock, setSelectedStock] = useState<Stock | null>(null)
   const [simulatedStocks, setSimulatedStocks] = useState<Stock[]>(generateSimulatedStocks())
   const [isLiveMode, setIsLiveMode] = useState(true)
+  const [realDataFetched, setRealDataFetched] = useState(false)
+
+  // Fetch REAL stock data on mount to teach the simulation
+  useEffect(() => {
+    const fetchRealDataForLearning = async () => {
+      if (realDataFetched) return
+      
+      console.log('🧠 AI Learning: Fetching real stock data to teach simulation...')
+      
+      // Fetch real data for popular stocks to teach the simulation
+      const symbolsToLearn = ['TSLA', 'AMD', 'PLTR', 'SOFI', 'HOOD']
+      
+      try {
+        for (const symbol of symbolsToLearn) {
+          try {
+            const realStock = await getStock(symbol, '5m')
+            if (realStock && realStock.chartData) {
+              console.log(`✅ Learned from ${symbol}: ${realStock.changePercent}% change`)
+              
+              // Use real data to update simulation parameters
+              setSimulatedStocks(prevStocks => prevStocks.map(stock => {
+                // Blend real patterns into simulation
+                if (stock.chartData && realStock.chartData['5m']) {
+                  // Copy real volatility patterns
+                  const realVolatility = calculateVolatility(realStock.chartData['5m'])
+                  stock.volatility = realVolatility
+                }
+                return stock
+              }))
+            }
+          } catch (err) {
+            console.log(`⚠️ Could not fetch ${symbol} for learning (API might be locked)`)
+          }
+        }
+        setRealDataFetched(true)
+        console.log('🎓 AI Learning complete! Simulation enhanced with real market patterns')
+      } catch (error) {
+        console.error('Error fetching real data for learning:', error)
+      }
+    }
+    
+    fetchRealDataForLearning()
+  }, [realDataFetched])
 
   // Real-time updates - update every 3 seconds for visible demo movement
   useEffect(() => {
@@ -27,6 +71,18 @@ export default function SimulatedScanner() {
 
     return () => clearInterval(interval)
   }, [isLiveMode])
+  
+  function calculateVolatility(candles: Candle[]): number {
+    if (!candles || candles.length < 2) return 0.02
+    
+    const changes = []
+    for (let i = 1; i < Math.min(candles.length, 20); i++) {
+      const change = Math.abs((candles[i].close - candles[i-1].close) / candles[i-1].close)
+      changes.push(change)
+    }
+    
+    return changes.reduce((sum, val) => sum + val, 0) / changes.length || 0.02
+  }
 
   type MovementPattern = 'uptrend' | 'downtrend' | 'breakout' | 'breakdown' | 'consolidation' | 'volatile' | 'pullback' | 'reversal'
 

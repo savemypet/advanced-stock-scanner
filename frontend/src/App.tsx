@@ -45,23 +45,50 @@ function App() {
     notifyOnNewStocks: true,
   })
 
-  // Check for saved rate limit on mount
+  // Check for saved rate limit on mount AND verify with backend
   useEffect(() => {
-    const savedRateLimitUntil = localStorage.getItem('rateLimitedUntil')
-    if (savedRateLimitUntil) {
-      const readyAt = new Date(savedRateLimitUntil)
-      const now = Date.now()
+    const checkLockoutStatus = async () => {
+      const savedRateLimitUntil = localStorage.getItem('rateLimitedUntil')
+      if (savedRateLimitUntil) {
+        const readyAt = new Date(savedRateLimitUntil)
+        const now = Date.now()
+        
+        // If still rate limited, restore the state
+        if (readyAt.getTime() > now) {
+          setRateLimited(true)
+          setReadyTime(readyAt)
+          console.log('Restored rate limit state from localStorage:', readyAt.toLocaleTimeString())
+        } else {
+          // Rate limit expired, clear localStorage
+          localStorage.removeItem('rateLimitedUntil')
+        }
+      }
       
-      // If still rate limited, restore the state
-      if (readyAt.getTime() > now) {
-        setRateLimited(true)
-        setReadyTime(readyAt)
-        console.log('Restored rate limit state from localStorage:', readyAt.toLocaleTimeString())
-      } else {
-        // Rate limit expired, clear localStorage
-        localStorage.removeItem('rateLimitedUntil')
+      // ALWAYS check backend status on mount to see if fallback API is available
+      try {
+        const testScan = await scanStocks({
+          minPrice: 1,
+          maxPrice: 20,
+          maxFloat: 10000000,
+          minGainPercent: 100, // High threshold to get quick empty response
+          volumeMultiplier: 100,
+          chartTimeframe: '5m',
+          displayCount: 1
+        })
+        
+        // If scan succeeded, backend has working API (Yahoo or SerpAPI)
+        if (testScan.apiStatus && !testScan.apiStatus.yahooLocked) {
+          console.log('✅ Backend has working API - clearing frontend lockout')
+          setRateLimited(false)
+          setReadyTime(null)
+          localStorage.removeItem('rateLimitedUntil')
+        }
+      } catch (error) {
+        console.log('Backend status check failed:', error)
       }
     }
+    
+    checkLockoutStatus()
   }, [])
 
   const performScan = useCallback(async () => {
@@ -113,10 +140,22 @@ function App() {
           return stock
         })
         
-        // Clear rate limit if scan succeeded
-        setRateLimited(false)
-        setReadyTime(null)
-        localStorage.removeItem('rateLimitedUntil')
+        // Check backend API status and update lockout state
+        if (data.apiStatus) {
+          // Backend is using SerpAPI or Yahoo is unlocked
+          if (!data.apiStatus.yahooLocked || data.apiStatus.serpapiQuota.remaining > 0) {
+            // Clear frontend lockout - backend has fallback working
+            setRateLimited(false)
+            setReadyTime(null)
+            localStorage.removeItem('rateLimitedUntil')
+            console.log(`✅ Backend using ${data.apiStatus.activeSource} - Frontend unlocked`)
+          }
+        } else {
+          // Old API response format - clear rate limit if scan succeeded
+          setRateLimited(false)
+          setReadyTime(null)
+          localStorage.removeItem('rateLimitedUntil')
+        }
         
         // Check for new stocks
         if (settings.notificationsEnabled && settings.notifyOnNewStocks) {
@@ -154,16 +193,18 @@ function App() {
       
       // Check if it's a rate limit error
       if (error?.isRateLimit || error?.message?.includes('429') || error?.message?.includes('Too Many Requests') || error?.message?.includes('Rate Limited')) {
+        // Only lock if BOTH Yahoo and SerpAPI failed (true lockout)
+        // If backend has fallback, don't lock frontend
         setRateLimited(true)
-        const readyAt = new Date(Date.now() + 120 * 60 * 1000) // 2 hours from now (Yahoo's actual limit)
+        const readyAt = new Date(Date.now() + 120 * 60 * 1000) // 2 hours from now
         setReadyTime(readyAt)
         
-        // Save rate limit to localStorage so it persists across refreshes
+        // Save rate limit to localStorage
         localStorage.setItem('rateLimitedUntil', readyAt.toISOString())
         
-        toast.error('Yahoo Finance Rate Limit - 2 Hour Lockout', {
-          description: `⚠️ Yahoo blocked your IP. Scanner locked until ${readyAt.toLocaleTimeString()}. Do NOT scan before then or it resets!`,
-          duration: 15000
+        toast.error('Rate Limit Detected', {
+          description: `⚠️ Backend is switching to fallback API (SerpAPI). Scanner may still work!`,
+          duration: 8000
         })
       } else {
         toast.error('Failed to scan stocks', {

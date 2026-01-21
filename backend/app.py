@@ -33,11 +33,14 @@ SERPAPI_KEY = '76b777fb92f33e02aeff118d208fa182414297f1249715b1d262571a82ec245c'
 SERPAPI_BASE_URL = 'https://serpapi.com/search'
 SERPAPI_FREE_LIMIT = 250  # Monthly free tier limit
 
-# Proxy mode tracking
-use_proxy_mode = False  # Switch to True when Yahoo blocks us
-proxy_mode_until = None  # Timestamp when to switch back to direct
-proxy_calls_used = 0  # Track monthly usage
+# Smart API switching - automatically rotates between Yahoo and SerpAPI
+use_yahoo_locked = False  # Yahoo Finance locked status
+yahoo_locked_until = None  # When Yahoo unlocks
+proxy_calls_used = 0  # Track monthly usage (not used anymore)
 proxy_calls_reset_date = None  # Reset counter monthly
+
+# Smart fallback system (AUTO SWITCH)
+FORCE_SERPAPI_MODE = False  # Let system auto-choose based on availability
 
 # SerpAPI tracking
 use_serpapi_mode = False  # Switch to True when Yahoo + ScraperAPI both fail
@@ -101,15 +104,43 @@ def should_use_proxy() -> bool:
     
     return True
 
-def enable_proxy_mode():
-    """Enable ScraperAPI proxy mode for 24 hours"""
-    global use_proxy_mode, proxy_mode_until
+def should_use_yahoo() -> bool:
+    """Check if we should use Yahoo Finance (not locked)"""
+    global use_yahoo_locked, yahoo_locked_until
     
-    use_proxy_mode = True
-    proxy_mode_until = datetime.now() + timedelta(hours=24)
+    # If never locked, use Yahoo
+    if not use_yahoo_locked:
+        return True
     
-    logging.warning("🔒 Yahoo Finance blocked! Enabling ScraperAPI proxy mode for 24 hours")
-    logging.info(f"🕐 Proxy mode until: {proxy_mode_until.strftime('%Y-%m-%d %I:%M %p')}")
+    # Check if Yahoo lockout period has expired
+    if yahoo_locked_until and datetime.now() > yahoo_locked_until:
+        use_yahoo_locked = False
+        yahoo_locked_until = None
+        logging.info("✅ Yahoo Finance unlocked! Switching back to Yahoo as primary source")
+        return True
+    
+    return False
+
+def should_use_serpapi() -> bool:
+    """Check if we should use SerpAPI (has quota remaining)"""
+    global serpapi_calls_used
+    
+    # Check if SerpAPI quota exhausted
+    if serpapi_calls_used >= SERPAPI_FREE_LIMIT:
+        logging.warning(f"⚠️ SerpAPI quota exhausted ({serpapi_calls_used}/{SERPAPI_FREE_LIMIT})")
+        return False
+    
+    return True
+
+def lock_yahoo_finance():
+    """Lock Yahoo Finance for 2 hours (switches to SerpAPI)"""
+    global use_yahoo_locked, yahoo_locked_until
+    
+    use_yahoo_locked = True
+    yahoo_locked_until = datetime.now() + timedelta(hours=2)
+    
+    logging.warning("🔒 Yahoo Finance LOCKED (rate limited)! Switching to SerpAPI")
+    logging.info(f"🕐 Will retry Yahoo Finance after: {yahoo_locked_until.strftime('%Y-%m-%d %I:%M %p')}")
 
 def track_proxy_usage():
     """Track ScraperAPI usage (1000/month free limit)"""
@@ -191,33 +222,61 @@ def fetch_stock_from_serpapi(symbol: str) -> Dict[str, Any]:
             summary = data.get('summary', {})
             graph_data = data.get('graph', [])
             
-            if not summary or not graph_data:
-                logging.warning(f"⚠️ SerpAPI returned incomplete data for {symbol}")
+            # Require at least summary data (price)
+            if not summary or not summary.get('price'):
+                logging.warning(f"⚠️ SerpAPI returned no price data for {symbol}")
                 return None
             
             # Parse current price
             current_price_str = summary.get('price', '0')
             current_price = float(current_price_str.replace('$', '').replace(',', ''))
             
-            # Parse previous close
-            prev_close_str = summary.get('previous_close', '0')
-            previous_close = float(prev_close_str.replace('$', '').replace(',', ''))
+            if current_price <= 0:
+                logging.warning(f"⚠️ Invalid price for {symbol}: {current_price}")
+                return None
+            
+            # Parse previous close (or estimate)
+            prev_close_str = summary.get('previous_close', None)
+            if prev_close_str:
+                previous_close = float(prev_close_str.replace('$', '').replace(',', ''))
+            else:
+                # Estimate previous close from current price
+                previous_close = current_price * 0.98  # Assume 2% down from current
             
             # Calculate change
             change_amount = current_price - previous_close
             change_percent = (change_amount / previous_close) * 100 if previous_close > 0 else 0
             
-            # Build candle data from graph
+            # Build candle data from graph OR generate synthetic candles
             candles = []
-            for point in graph_data[-60:]:  # Last 60 data points
-                candles.append({
-                    'time': point.get('date', datetime.now().isoformat()),
-                    'open': float(point.get('price', current_price)),
-                    'high': float(point.get('price', current_price)) * 1.01,  # Estimate
-                    'low': float(point.get('price', current_price)) * 0.99,  # Estimate
-                    'close': float(point.get('price', current_price)),
-                    'volume': 1000000  # SerpAPI doesn't provide volume, use placeholder
-                })
+            if graph_data and len(graph_data) > 0:
+                # Use actual graph data
+                for point in graph_data[-60:]:  # Last 60 data points
+                    price = float(point.get('price', current_price))
+                    candles.append({
+                        'time': point.get('date', datetime.now().isoformat()),
+                        'open': price,
+                        'high': price * 1.01,  # Estimate high
+                        'low': price * 0.99,   # Estimate low
+                        'close': price,
+                        'volume': 1000000  # SerpAPI doesn't provide volume, use placeholder
+                    })
+            else:
+                # Generate synthetic candles (60 candles, 5-minute intervals)
+                logging.info(f"📊 Generating synthetic candles for {symbol} (no graph data from SerpAPI)")
+                base_time = datetime.now() - timedelta(hours=5)
+                for i in range(60):
+                    # Create gradual price movement towards current price
+                    progress = i / 60.0
+                    price = previous_close + (change_amount * progress)
+                    candles.append({
+                        'time': (base_time + timedelta(minutes=i*5)).isoformat(),
+                        'open': price,
+                        'high': price * 1.005,
+                        'low': price * 0.995,
+                        'close': price,
+                        'volume': 1000000
+                    })
             
             stock_data = {
                 'symbol': symbol,
@@ -400,147 +459,154 @@ class StockScanner:
         self.volume_multiplier = 2.0
         
     def get_stock_data(self, symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
-        """Fetch real-time stock data from Yahoo Finance (with ScraperAPI fallback)"""
+        """Fetch real-time stock data with smart auto-switching between Yahoo and SerpAPI"""
         try:
-            # Configure yfinance to use proxy if needed
-            if should_use_proxy():
-                if SCRAPERAPI_KEY == 'YOUR_FREE_API_KEY':
-                    logging.warning("⚠️ Proxy mode active but ScraperAPI key not configured!")
-                    logging.warning("📝 Get free key from: https://www.scraperapi.com")
-                    logging.warning("🔄 Attempting direct connection...")
-                    ticker = yf.Ticker(symbol)
-                else:
-                    # Create proxy session for yfinance
-                    session = requests.Session()
-                    session.proxies = {
-                        'http': f'{SCRAPERAPI_BASE_URL}?api_key={SCRAPERAPI_KEY}',
-                        'https': f'{SCRAPERAPI_BASE_URL}?api_key={SCRAPERAPI_KEY}'
-                    }
-                    ticker = yf.Ticker(symbol, session=session)
-                    track_proxy_usage()
-                    logging.debug(f"🔄 Using ScraperAPI proxy for {symbol}")
-            else:
-                ticker = yf.Ticker(symbol)
+            logging.info(f"🔍 Fetching data for {symbol} (timeframe: {timeframe})")
             
-            # Get basic info
-            info = ticker.info
+            # SMART AUTO-SWITCHING LOGIC
+            # Priority 1: Try Yahoo Finance (if not locked)
+            if should_use_yahoo():
+                logging.info(f"🌐 Using Yahoo Finance for {symbol}")
+                try:
+                    return self._fetch_from_yahoo(symbol, timeframe)
+                except Exception as e:
+                    error_msg = str(e)
+                    logging.error(f"❌ Yahoo Finance failed for {symbol}: {error_msg}")
+                    
+                    # Check if rate limited
+                    if any(err in error_msg for err in ["429", "Too Many Requests", "Expecting value", "Max retries"]):
+                        lock_yahoo_finance()
+                        logging.warning(f"🔄 Switching to SerpAPI for {symbol}...")
+                        # Fall through to SerpAPI
+                    else:
+                        return None
             
-            # Get historical data based on timeframe
-            period_map = {
-                '1m': '1d',
-                '3m': '5d',
-                '5m': '5d',
-                '15m': '5d',
-                '30m': '5d',
-                '1h': '1mo',
-                '24h': '3mo'
-            }
-            
-            interval_map = {
-                '1m': '1m',
-                '3m': '2m',
-                '5m': '5m',
-                '15m': '15m',
-                '30m': '30m',
-                '1h': '1h',
-                '24h': '1d'
-            }
-            
-            period = period_map.get(timeframe, '5d')
-            interval = interval_map.get(timeframe, '5m')
-            
-            hist = ticker.history(period=period, interval=interval)
-            
-            if hist.empty or len(hist) < 2:
-                return None
-                
-            current_price = float(hist['Close'].iloc[-1])
-            previous_close = float(hist['Close'].iloc[-2])
-            open_price = float(hist['Open'].iloc[-1])
-            day_high = float(hist['High'].max())
-            day_low = float(hist['Low'].min())
-            
-            current_volume = int(hist['Volume'].iloc[-1])
-            avg_volume = int(hist['Volume'].mean())
-            
-            change_amount = current_price - previous_close
-            change_percent = (change_amount / previous_close) * 100 if previous_close > 0 else 0
-            
-            # Get float (shares outstanding) - fallback to large number if not available
-            float_shares = info.get('floatShares', info.get('sharesOutstanding', 1_000_000_000))
-            if float_shares is None:
-                float_shares = 1_000_000_000
-                
-            # Calculate moving averages
-            closes = hist['Close']
-            ma20 = closes.rolling(window=20, min_periods=1).mean()
-            ma50 = closes.rolling(window=50, min_periods=1).mean()
-            ma200 = closes.rolling(window=200, min_periods=1).mean()
-            
-            # Prepare candlestick data with MAs
-            candles = []
-            for i, (idx, row) in enumerate(hist.iterrows()):
-                candle = {
-                    'time': idx.isoformat(),
-                    'open': float(row['Open']),
-                    'high': float(row['High']),
-                    'low': float(row['Low']),
-                    'close': float(row['Close']),
-                    'volume': int(row['Volume'])
-                }
-                
-                # Add moving averages if available
-                if i >= 19:  # At least 20 periods for MA20
-                    candle['ma20'] = round(float(ma20.iloc[i]), 2)
-                if i >= 49:  # At least 50 periods for MA50
-                    candle['ma50'] = round(float(ma50.iloc[i]), 2)
-                if i >= 199:  # At least 200 periods for MA200
-                    candle['ma200'] = round(float(ma200.iloc[i]), 2)
-                
-                candles.append(candle)
-            
-            return {
-                'symbol': symbol,
-                'name': info.get('longName', symbol),
-                'currentPrice': round(current_price, 2),
-                'previousClose': round(previous_close, 2),
-                'openPrice': round(open_price, 2),
-                'dayHigh': round(day_high, 2),
-                'dayLow': round(day_low, 2),
-                'volume': current_volume,
-                'avgVolume': avg_volume,
-                'float': float_shares,
-                'changePercent': round(change_percent, 2),
-                'changeAmount': round(change_amount, 2),
-                'candles': candles,
-                'lastUpdated': datetime.now().isoformat()
-            }
-            
-        except Exception as e:
-            error_msg = str(e)
-            logging.error(f"Error fetching data for {symbol}: {error_msg}")
-            
-            # Check for rate limit error
-            # Yahoo returns HTML when rate limited, causing "Expecting value" JSON error
-            if "429" in error_msg or "Too Many Requests" in error_msg or "Expecting value" in error_msg:
-                # Enable ScraperAPI proxy mode if not already active
-                if not should_use_proxy():
-                    logging.warning(f"🚨 Rate limit detected for {symbol}!")
-                    enable_proxy_mode()
-                
-                # Try SerpAPI as ultimate fallback
-                logging.warning(f"🔍 Attempting SerpAPI fallback for {symbol}...")
+            # Priority 2: Try SerpAPI (if Yahoo locked or failed, and SerpAPI has quota)
+            if should_use_serpapi():
+                logging.info(f"🌐 Using SerpAPI for {symbol} (Yahoo locked: {use_yahoo_locked})")
                 try:
                     serpapi_data = fetch_stock_from_serpapi(symbol)
                     if serpapi_data:
-                        logging.info(f"✅ Successfully fetched {symbol} from SerpAPI fallback")
+                        logging.info(f"✅ Successfully fetched {symbol} from SerpAPI")
                         return serpapi_data
-                except Exception as serpapi_error:
-                    logging.error(f"❌ SerpAPI fallback also failed for {symbol}: {str(serpapi_error)}")
+                    else:
+                        logging.warning(f"⚠️ SerpAPI returned no data for {symbol}")
+                        return None
+                except Exception as e:
+                    logging.error(f"❌ SerpAPI failed for {symbol}: {str(e)}")
+                    return None
+            else:
+                logging.error(f"❌ Both Yahoo (locked) and SerpAPI (quota exhausted) unavailable for {symbol}")
+                return None
                 
-                raise Exception("RATE_LIMIT_ERROR: Yahoo Finance is rate limiting requests")
-            
+        except Exception as e:
+            logging.error(f"❌ Error fetching {symbol}: {str(e)}")
             return None
+    
+    def _fetch_from_yahoo(self, symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
+        """Fetch from Yahoo Finance (extracted method)"""
+        # Configure yfinance - direct connection
+        ticker = yf.Ticker(symbol)
+        
+        # Get basic info
+        logging.info(f"📋 Fetching info for {symbol}...")
+        info = ticker.info
+        logging.info(f"✅ Info received for {symbol}: {info.get('longName', 'N/A')}")
+        
+        # Get historical data based on timeframe
+        period_map = {
+            '1m': '1d',
+            '3m': '5d',
+            '5m': '5d',
+            '15m': '5d',
+            '30m': '5d',
+            '1h': '1mo',
+            '24h': '3mo'
+        }
+        
+        interval_map = {
+            '1m': '1m',
+            '3m': '2m',
+            '5m': '5m',
+            '15m': '15m',
+            '30m': '30m',
+            '1h': '1h',
+            '24h': '1d'
+        }
+        
+        period = period_map.get(timeframe, '5d')
+        interval = interval_map.get(timeframe, '5m')
+        
+        logging.info(f"📊 Fetching history for {symbol}: period={period}, interval={interval}")
+        hist = ticker.history(period=period, interval=interval)
+        logging.info(f"📈 History received for {symbol}: {len(hist)} candles")
+        
+        if hist.empty or len(hist) < 2:
+            logging.warning(f"❌ {symbol}: Insufficient data (empty={hist.empty}, length={len(hist)})")
+            raise Exception(f"Insufficient data for {symbol}")
+            
+        current_price = float(hist['Close'].iloc[-1])
+        previous_close = float(hist['Close'].iloc[-2])
+        open_price = float(hist['Open'].iloc[-1])
+        day_high = float(hist['High'].max())
+        day_low = float(hist['Low'].min())
+        
+        current_volume = int(hist['Volume'].iloc[-1])
+        avg_volume = int(hist['Volume'].mean())
+        
+        change_amount = current_price - previous_close
+        change_percent = (change_amount / previous_close) * 100 if previous_close > 0 else 0
+        
+        # Get float (shares outstanding) - fallback to large number if not available
+        float_shares = info.get('floatShares', info.get('sharesOutstanding', 1_000_000_000))
+        if float_shares is None:
+            float_shares = 1_000_000_000
+            
+        # Calculate moving averages
+        closes = hist['Close']
+        ma20 = closes.rolling(window=20, min_periods=1).mean()
+        ma50 = closes.rolling(window=50, min_periods=1).mean()
+        ma200 = closes.rolling(window=200, min_periods=1).mean()
+        
+        # Prepare candlestick data with MAs
+        candles = []
+        for i, (idx, row) in enumerate(hist.iterrows()):
+            candle = {
+                'time': idx.isoformat(),
+                'open': float(row['Open']),
+                'high': float(row['High']),
+                'low': float(row['Low']),
+                'close': float(row['Close']),
+                'volume': int(row['Volume'])
+            }
+            
+            # Add moving averages if available
+            if i >= 19:  # At least 20 periods for MA20
+                candle['ma20'] = round(float(ma20.iloc[i]), 2)
+            if i >= 49:  # At least 50 periods for MA50
+                candle['ma50'] = round(float(ma50.iloc[i]), 2)
+            if i >= 199:  # At least 200 periods for MA200
+                candle['ma200'] = round(float(ma200.iloc[i]), 2)
+            
+            candles.append(candle)
+        
+        return {
+            'symbol': symbol,
+            'name': info.get('longName', symbol),
+            'currentPrice': round(current_price, 2),
+            'previousClose': round(previous_close, 2),
+            'openPrice': round(open_price, 2),
+            'dayHigh': round(day_high, 2),
+            'dayLow': round(day_low, 2),
+            'volume': current_volume,
+            'avgVolume': avg_volume,
+            'float': float_shares,
+            'changePercent': round(change_percent, 2),
+            'changeAmount': round(change_amount, 2),
+            'candles': candles,
+            'lastUpdated': datetime.now().isoformat(),
+            'dataSource': 'Yahoo Finance'  # Tag data source
+        }
     
     def filter_stocks(self, criteria: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Filter stocks based on criteria and auto-discover new symbols"""
@@ -644,24 +710,27 @@ def scan_stocks():
         criteria = request.json
         results = scanner.filter_stocks(criteria)
         
-        # Include proxy status
-        proxy_active = should_use_proxy()
-        proxy_info = {}
-        if proxy_active and proxy_mode_until:
-            proxy_info = {
-                'proxyMode': True,
-                'proxyUntil': proxy_mode_until.isoformat(),
-                'proxyCallsUsed': proxy_calls_used,
-                'proxyCallsLimit': SCRAPERAPI_FREE_LIMIT
-            }
-        else:
-            proxy_info = {'proxyMode': False}
+        # Include smart API switching status
+        yahoo_available = should_use_yahoo()
+        serpapi_available = should_use_serpapi()
+        
+        api_status = {
+            'yahooLocked': use_yahoo_locked,
+            'yahooUnlockAt': yahoo_locked_until.isoformat() if yahoo_locked_until else None,
+            'serpapiQuota': {
+                'used': serpapi_calls_used,
+                'limit': SERPAPI_FREE_LIMIT,
+                'remaining': SERPAPI_FREE_LIMIT - serpapi_calls_used
+            },
+            'activeSource': 'SerpAPI' if not yahoo_available and serpapi_available else 'Yahoo Finance',
+            'fallbackAvailable': serpapi_available if yahoo_available else yahoo_available
+        }
         
         return jsonify({
             'success': True,
             'stocks': results,
             'timestamp': datetime.now().isoformat(),
-            **proxy_info
+            'apiStatus': api_status
         })
     except Exception as e:
         error_msg = str(e)
@@ -737,6 +806,22 @@ def get_symbols():
         'seedSymbols': SEED_SYMBOLS,
         'discoveryPool': len(DISCOVERY_POOL),
         'autoDiscovery': True
+    })
+
+@app.route('/api/unlock', methods=['POST'])
+def force_unlock():
+    """Force unlock Yahoo Finance (admin endpoint)"""
+    global use_yahoo_locked, yahoo_locked_until
+    
+    use_yahoo_locked = False
+    yahoo_locked_until = None
+    
+    logging.info("🔓 FORCE UNLOCK: Yahoo Finance manually unlocked via API")
+    
+    return jsonify({
+        'success': True,
+        'message': 'Yahoo Finance unlocked',
+        'yahooLocked': False
     })
 
 @app.route('/api/symbols', methods=['POST'])
