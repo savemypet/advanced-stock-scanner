@@ -6,7 +6,7 @@ import CandlestickOnlyChart from './CandlestickOnlyChart'
 import TradingViewChart from './TradingViewChart'
 import { formatNumber, formatCurrency } from '../utils/formatters'
 import { PatternSignal } from '../utils/candlestickPatterns'
-import axios from 'axios'
+import { getStockNews } from '../api/stockNewsApi'
 
 interface StockDetailModalProps {
   stock: Stock
@@ -14,45 +14,88 @@ interface StockDetailModalProps {
 }
 
 export default function StockDetailModal({ stock, onClose }: StockDetailModalProps) {
-  const [bookmapTimeframe, setBookmapTimeframe] = useState<ChartTimeframe>('5m')
-  const [candlestickTimeframe, setCandlestickTimeframe] = useState<ChartTimeframe>('5m')
-  const [tradingviewTimeframe, setTradingviewTimeframe] = useState<ChartTimeframe>('5m')
+  // UNIFIED TIMEFRAME - Controls all 3 charts simultaneously
+  const [activeTimeframe, setActiveTimeframe] = useState<ChartTimeframe>('5m')
   const [fullscreenChart, setFullscreenChart] = useState<'none' | 'bookmap' | 'candlestick' | 'tradingview'>('none')
   const [news, setNews] = useState<NewsItem[]>([])
   const [newsLoading, setNewsLoading] = useState(false)
   const [candlestickPattern, setCandlestickPattern] = useState<PatternSignal | null>(null)
+  const [cachedChartData, setCachedChartData] = useState<Record<ChartTimeframe, any[]>>(stock.chartData || {})
+  const [loadingTimeframes, setLoadingTimeframes] = useState<Set<ChartTimeframe>>(new Set())
   const isPositive = stock.changePercent >= 0
   const volumeRatio = (stock.volume / stock.avgVolume).toFixed(2)
   
-  // Available timeframes from chartData in chronological order
-  const timeframeOrder: ChartTimeframe[] = ['1m', '5m', '15m', '30m', '1h', '4h', '24h', '1week', '1month']
-  const availableTimeframes: ChartTimeframe[] = stock.chartData 
-    ? timeframeOrder.filter(tf => stock.chartData![tf])
-    : ['5m']
+  // All possible timeframes - let user click any of them
+  const timeframeOrder: ChartTimeframe[] = ['1m', '5m', '1h', '24h']
+  const availableTimeframes: ChartTimeframe[] = timeframeOrder
   
-  // Get candles for each chart's selected timeframe
-  const bookmapCandles = stock.chartData?.[bookmapTimeframe] || stock.candles
-  const candlestickCandles = stock.chartData?.[candlestickTimeframe] || stock.candles
-  const tradingviewCandles = stock.chartData?.[tradingviewTimeframe] || stock.candles
-
-  // Fetch news when modal opens (if stock has news)
-  useEffect(() => {
-    if (stock.hasNews) {
-      setNewsLoading(true)
-      axios.get(`http://127.0.0.1:5000/api/news/${stock.symbol}`)
-        .then(response => {
-          if (response.data.success) {
-            setNews(response.data.news || [])
-          }
-        })
-        .catch(error => {
-          console.error('Error fetching news:', error)
-        })
-        .finally(() => {
-          setNewsLoading(false)
-        })
+  // Function to change timeframe for ALL charts at once
+  const changeTimeframe = (timeframe: ChartTimeframe) => {
+    console.log(`🔄 Changing ALL charts to ${timeframe} timeframe`)
+    setActiveTimeframe(timeframe)
+    fetchTimeframeData(timeframe)
+  }
+  
+  // Function to fetch FRESH timeframe data on-demand (always fetches from backend)
+  const fetchTimeframeData = async (timeframe: ChartTimeframe, forceRefresh: boolean = false) => {
+    // Check if already loading
+    if (loadingTimeframes.has(timeframe)) {
+      return
     }
-  }, [stock.symbol, stock.hasNews])
+    
+    // ALWAYS fetch fresh data from backend (no cache check)
+    setLoadingTimeframes(prev => new Set(prev).add(timeframe))
+    console.log(`📊 Fetching FRESH ${timeframe} data for ${stock.symbol} from backend APIs...`)
+    
+    try {
+      // Add timestamp to force fresh data from backend
+      const timestamp = Date.now()
+      const response = await axios.get(`http://127.0.0.1:5000/api/stock/${stock.symbol}?timeframe=${timeframe}&t=${timestamp}`)
+      if (response.data.success && response.data.stock?.candles) {
+        setCachedChartData(prev => ({
+          ...prev,
+          [timeframe]: response.data.stock.candles
+        }))
+        const dataSource = response.data.stock.source || 'unknown'
+        console.log(`✅ Loaded FRESH ${timeframe} data: ${response.data.stock.candles.length} candles from ${dataSource}`)
+      }
+    } catch (error) {
+      console.error(`Error fetching ${timeframe} data:`, error)
+    } finally {
+      setLoadingTimeframes(prev => {
+        const next = new Set(prev)
+        next.delete(timeframe)
+        return next
+      })
+    }
+  }
+  
+  // All charts use the SAME timeframe
+  const currentCandles = cachedChartData[activeTimeframe] || stock.candles
+
+  // Fetch news when modal opens (always fetch from Render backend)
+  useEffect(() => {
+    setNewsLoading(true)
+    getStockNews(stock.symbol)
+      .then(newsItems => {
+        // Convert to NewsItem format
+        const formattedNews: NewsItem[] = newsItems.map(item => ({
+          title: item.title,
+          source: item.source,
+          url: item.url,
+          snippet: item.snippet,
+          publishedAt: item.publishedAt,
+        }))
+        setNews(formattedNews)
+      })
+      .catch(error => {
+        console.error('Error fetching news:', error)
+        setNews([]) // Set empty array on error
+      })
+      .finally(() => {
+        setNewsLoading(false)
+      })
+  }, [stock.symbol])
 
   useEffect(() => {
     // ESC key to close
@@ -149,6 +192,34 @@ export default function StockDetailModal({ stock, onClose }: StockDetailModalPro
           />
         </div>
 
+        {/* UNIFIED TIMEFRAME SELECTOR - Controls ALL 3 Charts */}
+        <div className="px-6 py-4 border-t border-border bg-muted/20">
+          <div className="flex items-center justify-center gap-3">
+            <span className="text-sm font-semibold text-muted-foreground">Chart Timeframe:</span>
+            <div className="flex gap-2">
+              {availableTimeframes.map((tf) => (
+                <button
+                  key={tf}
+                  onClick={() => changeTimeframe(tf)}
+                  disabled={loadingTimeframes.has(tf)}
+                  className={`px-6 py-2 rounded-lg font-bold text-sm transition-all ${
+                    activeTimeframe === tf
+                      ? 'bg-primary text-primary-foreground shadow-lg scale-105'
+                      : loadingTimeframes.has(tf)
+                      ? 'bg-muted/50 text-muted-foreground/50 cursor-wait'
+                      : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:scale-105'
+                  }`}
+                >
+                  {loadingTimeframes.has(tf) ? '⏳ Loading...' : tf}
+                </button>
+              ))}
+            </div>
+            <span className="text-xs text-muted-foreground/60">
+              ({cachedChartData[activeTimeframe]?.length || stock.candles?.length || 0} candles)
+            </span>
+          </div>
+        </div>
+
         {/* Breaking News Section */}
         {stock.hasNews && news.length > 0 && (
           <div className="px-6 py-4 border-t border-border">
@@ -233,21 +304,24 @@ export default function StockDetailModal({ stock, onClose }: StockDetailModalPro
                           {availableTimeframes.map((tf) => (
                             <button
                               key={tf}
-                              onClick={() => setBookmapTimeframe(tf)}
+                              onClick={() => changeTimeframe(tf)}
+                              disabled={loadingTimeframes.has(tf)}
                               className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${
-                                bookmapTimeframe === tf
+                                activeTimeframe === tf
                                   ? 'bg-primary text-primary-foreground'
+                                  : loadingTimeframes.has(tf)
+                                  ? 'bg-muted/50 text-muted-foreground/50 cursor-wait'
                                   : 'bg-muted text-muted-foreground hover:bg-muted/80'
                               }`}
                             >
-                              {tf}
+                              {loadingTimeframes.has(tf) ? '...' : tf}
                             </button>
                           ))}
                         </div>
                       </div>
                     )}
                     <div className="h-[calc(100%-60px)]">
-                      <BookmapChart candles={bookmapCandles} height={window.innerHeight - 200} />
+                      <BookmapChart candles={currentCandles} height={window.innerHeight - 200} />
                     </div>
                   </div>
                 )}
@@ -262,21 +336,24 @@ export default function StockDetailModal({ stock, onClose }: StockDetailModalPro
                           {availableTimeframes.map((tf) => (
                             <button
                               key={tf}
-                              onClick={() => setCandlestickTimeframe(tf)}
+                              onClick={() => changeTimeframe(tf)}
+                              disabled={loadingTimeframes.has(tf)}
                               className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${
-                                candlestickTimeframe === tf
+                                activeTimeframe === tf
                                   ? 'bg-primary text-primary-foreground'
+                                  : loadingTimeframes.has(tf)
+                                  ? 'bg-muted/50 text-muted-foreground/50 cursor-wait'
                                   : 'bg-muted text-muted-foreground hover:bg-muted/80'
                               }`}
                             >
-                              {tf}
+                              {loadingTimeframes.has(tf) ? '...' : tf}
                             </button>
                           ))}
                         </div>
                       </div>
                     )}
                     <div className="h-[calc(100%-60px)]">
-                      <CandlestickOnlyChart candles={candlestickCandles} height={window.innerHeight - 200} />
+                      <CandlestickOnlyChart candles={currentCandles} height={window.innerHeight - 200} />
                     </div>
                   </div>
                 )}
@@ -291,21 +368,24 @@ export default function StockDetailModal({ stock, onClose }: StockDetailModalPro
                           {availableTimeframes.map((tf) => (
                             <button
                               key={tf}
-                              onClick={() => setTradingviewTimeframe(tf)}
+                              onClick={() => changeTimeframe(tf)}
+                              disabled={loadingTimeframes.has(tf)}
                               className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${
-                                tradingviewTimeframe === tf
+                                activeTimeframe === tf
                                   ? 'bg-primary text-primary-foreground'
+                                  : loadingTimeframes.has(tf)
+                                  ? 'bg-muted/50 text-muted-foreground/50 cursor-wait'
                                   : 'bg-muted text-muted-foreground hover:bg-muted/80'
                               }`}
                             >
-                              {tf}
+                              {loadingTimeframes.has(tf) ? '...' : tf}
                             </button>
                           ))}
                         </div>
                       </div>
                     )}
                     <div className="h-[calc(100%-60px)]">
-                      <TradingViewChart candles={tradingviewCandles} height={window.innerHeight - 200} />
+                      <TradingViewChart candles={currentCandles} height={window.innerHeight - 200} />
                     </div>
                   </div>
                 )}
@@ -351,15 +431,18 @@ export default function StockDetailModal({ stock, onClose }: StockDetailModalPro
                           key={tf}
                           onClick={(e) => {
                             e.stopPropagation()
-                            setBookmapTimeframe(tf)
+                            changeTimeframe(tf)
                           }}
+                          disabled={loadingTimeframes.has(tf)}
                           className={`px-3 py-1 rounded-lg font-medium text-xs transition-all ${
-                            bookmapTimeframe === tf
+                            activeTimeframe === tf
                               ? 'bg-primary text-primary-foreground'
+                              : loadingTimeframes.has(tf)
+                              ? 'bg-muted/50 text-muted-foreground/50 cursor-wait'
                               : 'bg-muted text-muted-foreground hover:bg-muted/80'
                           }`}
                         >
-                          {tf}
+                          {loadingTimeframes.has(tf) ? '...' : tf}
                         </button>
                       ))}
                     </div>
@@ -367,7 +450,7 @@ export default function StockDetailModal({ stock, onClose }: StockDetailModalPro
                 )}
               </div>
               <div onClick={(e) => e.stopPropagation()}>
-                <BookmapChart candles={bookmapCandles} height={500} />
+                <BookmapChart candles={currentCandles} height={500} />
               </div>
             </div>
 
@@ -411,15 +494,18 @@ export default function StockDetailModal({ stock, onClose }: StockDetailModalPro
                             key={tf}
                             onClick={(e) => {
                               e.stopPropagation()
-                              setCandlestickTimeframe(tf)
+                              changeTimeframe(tf)
                             }}
+                            disabled={loadingTimeframes.has(tf)}
                             className={`px-3 py-1 rounded-lg font-medium text-xs transition-all ${
-                              candlestickTimeframe === tf
+                              activeTimeframe === tf
                                 ? 'bg-primary text-primary-foreground'
+                                : loadingTimeframes.has(tf)
+                                ? 'bg-muted/50 text-muted-foreground/50 cursor-wait'
                                 : 'bg-muted text-muted-foreground hover:bg-muted/80'
                             }`}
                           >
-                            {tf}
+                            {loadingTimeframes.has(tf) ? '...' : tf}
                           </button>
                         ))}
                       </div>
@@ -454,7 +540,7 @@ export default function StockDetailModal({ stock, onClose }: StockDetailModalPro
               </div>
               <div onClick={(e) => e.stopPropagation()}>
                 <CandlestickOnlyChart 
-                  candles={candlestickCandles} 
+                  candles={currentCandles} 
                   height={500} 
                   onPatternDetected={setCandlestickPattern}
                 />
@@ -500,15 +586,18 @@ export default function StockDetailModal({ stock, onClose }: StockDetailModalPro
                           key={tf}
                           onClick={(e) => {
                             e.stopPropagation()
-                            setTradingviewTimeframe(tf)
+                            changeTimeframe(tf)
                           }}
+                          disabled={loadingTimeframes.has(tf)}
                           className={`px-3 py-1 rounded-lg font-medium text-xs transition-all ${
-                            tradingviewTimeframe === tf
+                            activeTimeframe === tf
                               ? 'bg-primary text-primary-foreground'
+                              : loadingTimeframes.has(tf)
+                              ? 'bg-muted/50 text-muted-foreground/50 cursor-wait'
                               : 'bg-muted text-muted-foreground hover:bg-muted/80'
                           }`}
                         >
-                          {tf}
+                          {loadingTimeframes.has(tf) ? '...' : tf}
                         </button>
                       ))}
                     </div>
@@ -516,7 +605,7 @@ export default function StockDetailModal({ stock, onClose }: StockDetailModalPro
                 )}
               </div>
               <div onClick={(e) => e.stopPropagation()}>
-                <TradingViewChart candles={tradingviewCandles} height={500} />
+                <TradingViewChart candles={currentCandles} height={500} />
               </div>
             </div>
 

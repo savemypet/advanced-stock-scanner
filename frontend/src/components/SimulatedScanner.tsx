@@ -11,16 +11,57 @@ interface SimulatedScannerProps {
 
 export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerProps) {
   const [selectedStock, setSelectedStock] = useState<Stock | null>(null)
-  const [simulatedStocks, setSimulatedStocks] = useState<Stock[]>(
-    liveStocks.length > 0 ? liveStocks : generateSimulatedStocks()
-  )
+  const [simulatedStocks, setSimulatedStocks] = useState<Stock[]>([])
   const [isLiveMode, setIsLiveMode] = useState(true)
+  const [isLoading, setIsLoading] = useState(true)
 
-  // Update simulated stocks when live stocks change
+  // Fetch today's discovered stocks from backend for AI learning
+  useEffect(() => {
+    const fetchDailyStocks = async () => {
+      try {
+        console.log(`🤖 Fetching today's discovered stocks for AI learning...`)
+        const response = await fetch('http://localhost:5000/api/daily-discovered')
+        const data = await response.json()
+        
+        if (data.success && data.stocks.length > 0) {
+          console.log(`✅ Demo learning from ${data.count} real stocks found today:`, data.stocks.map((s: any) => s.symbol).join(', '))
+          setSimulatedStocks(data.stocks)
+        } else {
+          // No stocks discovered yet - use live stocks if available, or generate demo
+          if (liveStocks && liveStocks.length > 0) {
+            console.log(`📊 Using ${liveStocks.length} stocks from current Live Scanner`)
+            setSimulatedStocks(liveStocks)
+          } else {
+            console.log(`📝 No real stocks found yet - generating demo stocks`)
+            setSimulatedStocks(generateSimulatedStocks())
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching daily stocks:', error)
+        // Fallback to live stocks or demo
+        if (liveStocks && liveStocks.length > 0) {
+          setSimulatedStocks(liveStocks)
+        } else {
+          setSimulatedStocks(generateSimulatedStocks())
+        }
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    
+    fetchDailyStocks()
+  }, [])
+
+  // Update when live stocks change (real-time updates)
   useEffect(() => {
     if (liveStocks && liveStocks.length > 0) {
-      console.log(`📊 Simulated Demo: Using ${liveStocks.length} stocks from Live Scanner`)
-      setSimulatedStocks(liveStocks)
+      console.log(`🔄 Live Scanner updated - refreshing demo with ${liveStocks.length} stocks`)
+      setSimulatedStocks(prevStocks => {
+        // Merge with existing stocks to avoid losing history
+        const existingSymbols = new Set(prevStocks.map(s => s.symbol))
+        const newStocks = liveStocks.filter(s => !existingSymbols.has(s.symbol))
+        return [...prevStocks, ...newStocks]
+      })
     }
   }, [liveStocks])
 
@@ -709,12 +750,17 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
               )}
             </h2>
             <p className="text-sm text-muted-foreground mt-1">
-              {liveStocks && liveStocks.length > 0 
-                ? '📡 Showing stocks from your Live Scanner - watch charts update in real-time!'
-                : (isLiveMode 
-                  ? '🎮 Interactive demo with simulated data - test all features!'
-                  : 'Click any stock to see Bookmap-style volume charts')
-              }
+              {isLoading ? (
+                '⏳ Loading today\'s discovered stocks for AI learning...'
+              ) : simulatedStocks.length > 0 && simulatedStocks[0].symbol && !simulatedStocks[0].symbol.startsWith('DEMO-') ? (
+                `🤖 AI Learning from ${simulatedStocks.length} real stocks found today - watch candlestick patterns in action!`
+              ) : liveStocks && liveStocks.length > 0 ? (
+                '📡 Showing stocks from your Live Scanner - watch charts update in real-time!'
+              ) : isLiveMode ? (
+                '🎮 Demo mode - run Live Scanner first for AI to learn from real stocks!'
+              ) : (
+                'Click any stock to see Bookmap-style volume charts'
+              )}
             </p>
           </div>
           <div className="flex items-center gap-2">

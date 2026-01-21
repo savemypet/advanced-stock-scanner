@@ -5,6 +5,7 @@ import StockScanner from './components/StockScanner'
 import SimulatedScanner from './components/SimulatedScanner'
 import SettingsPanel from './components/SettingsPanel'
 import StockDetailModal from './components/StockDetailModal'
+import NewsSection from './components/NewsSection'
 import { scanStocks } from './api/stockApi'
 import { Stock, ScannerSettings } from './types'
 import { detectPatterns, getLatestSignal } from './utils/candlestickPatterns'
@@ -32,15 +33,15 @@ function App() {
   
   const [settings, setSettings] = useState<ScannerSettings>({
     minPrice: 1,
-    maxPrice: 20,
-    maxFloat: 10_000_000, // 10M shares - LOW-FLOAT for volatile stocks (displays as "10M")
-    minGainPercent: 10, // 10% - only explosive movers (adjust lower in settings for more stocks)
-    volumeMultiplier: 5, // 5x - EXPLOSIVE volume only (adjust lower in settings for more stocks)
-    displayCount: 10, // Show all 10 symbols if they qualify
+    maxPrice: 200,
+    maxFloat: 500_000_000, // 500M shares - moderate float for better stock discovery
+    minGainPercent: 2, // 2% - reasonable daily gain (shows more stocks)
+    volumeMultiplier: 1.5, // 1.5x - moderate volume filter (shows more stocks)
+    displayCount: 5, // Show 5 stocks (matches Massive.com's 5 calls/min limit)
     chartTimeframe: '5m',
     autoAdd: true,
-    realTimeUpdates: false, // Start paused - user must click Start or Refresh
-    updateInterval: 20, // 20 seconds - FASTEST safe interval (1,800 req/hr, 200 buffer)
+    realTimeUpdates: true, // AUTO-SCAN ENABLED - dynamically adjusts to API availability
+    updateInterval: 20, // SMART: 20s with Yahoo/SerpAPI/AlphaVantage, auto-adjusts to 60s when only Massive.com available
     notificationsEnabled: true,
     notifyOnNewStocks: true,
   })
@@ -158,6 +159,16 @@ function App() {
           const serpapiAvailable = result.apiStatus.serpapiQuota?.remaining > 0
           const alphavantageAvailable = result.apiStatus.alphavantageQuota?.remaining > 0
           const anyApiAvailable = massiveAvailable || yahooAvailable || serpapiAvailable || alphavantageAvailable
+          
+          // SMART INTERVAL ADJUSTMENT: 20s with high-quota APIs, 60s with Massive.com only
+          if (result.apiStatus.recommendedInterval && result.apiStatus.recommendedInterval !== settings.updateInterval) {
+            const newInterval = result.apiStatus.recommendedInterval
+            const reason = newInterval === 20 
+              ? 'High-quota APIs available (Yahoo/SerpAPI/AlphaVantage)'
+              : 'Only Massive.com available (5/min limit)'
+            console.log(`🔄 Adjusting scan interval: ${settings.updateInterval}s → ${newInterval}s (${reason})`)
+            setSettings(prev => ({ ...prev, updateInterval: newInterval }))
+          }
           
           if (anyApiAvailable) {
             // Clear frontend lockout - backend has at least one working API
@@ -608,21 +619,22 @@ function App() {
 
       {/* Main Content */}
       <main className="container mx-auto px-3 sm:px-4 py-4 sm:py-6">
-        <div className="flex flex-col lg:flex-row gap-4 sm:gap-6">
-          {/* Scanner Results */}
-          <div className="flex-1 min-w-0">
-            {viewMode === 'simulated' ? (
-              <SimulatedScanner liveStocks={stocks} />
-            ) : (
-              <StockScanner 
-                stocks={stocks} 
-                isLoading={isLoading}
-                settings={settings}
-                countdown={countdown}
-                onStockClick={(stock) => setSelectedStock(stock)}
-              />
-            )}
-          </div>
+        <div className="flex flex-col gap-4 sm:gap-6">
+          <div className="flex flex-col lg:flex-row gap-4 sm:gap-6">
+            {/* Scanner Results */}
+            <div className="flex-1 min-w-0">
+              {viewMode === 'simulated' ? (
+                <SimulatedScanner liveStocks={stocks} />
+              ) : (
+                <StockScanner 
+                  stocks={stocks} 
+                  isLoading={isLoading}
+                  settings={settings}
+                  countdown={countdown}
+                  onStockClick={(stock) => setSelectedStock(stock)}
+                />
+              )}
+            </div>
           
           {/* Settings Sidebar - Mobile Overlay / Desktop Sidebar */}
           {showSettings && (
@@ -645,6 +657,10 @@ function App() {
               </div>
             </>
           )}
+          </div>
+          
+          {/* News Section - Shows news found for stocks that qualified */}
+          <NewsSection />
         </div>
       </main>
 
