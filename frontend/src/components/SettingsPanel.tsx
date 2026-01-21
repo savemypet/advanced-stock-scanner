@@ -11,10 +11,66 @@ interface SettingsPanelProps {
   readyCountdown?: number
 }
 
+// Helper function to check if US stock market is open
+function isMarketOpen(): { isOpen: boolean; message: string } {
+  const now = new Date()
+  const day = now.getDay() // 0 = Sunday, 6 = Saturday
+  const hour = now.getHours()
+  const minute = now.getMinutes()
+  
+  // Market is closed on weekends
+  if (day === 0 || day === 6) {
+    return { 
+      isOpen: false, 
+      message: day === 0 ? 'Market closed (Sunday)' : 'Market closed (Saturday)' 
+    }
+  }
+  
+  // Convert to ET (simplified - assumes server/client is in ET or adjust accordingly)
+  // Market hours: 9:30 AM - 4:00 PM ET (14:30 - 20:00 UTC)
+  // For simplicity, we'll check local time (user should be aware of timezone)
+  const marketOpenHour = 9
+  const marketOpenMinute = 30
+  const marketCloseHour = 16
+  const marketCloseMinute = 0
+  
+  const currentTime = hour * 60 + minute
+  const openTime = marketOpenHour * 60 + marketOpenMinute
+  const closeTime = marketCloseHour * 60 + marketCloseMinute
+  
+  if (currentTime < openTime) {
+    const hoursUntilOpen = Math.floor((openTime - currentTime) / 60)
+    const minutesUntilOpen = (openTime - currentTime) % 60
+    return { 
+      isOpen: false, 
+      message: `Market closed - Opens in ${hoursUntilOpen}h ${minutesUntilOpen}m` 
+    }
+  }
+  
+  if (currentTime >= closeTime) {
+    return { 
+      isOpen: false, 
+      message: 'Market closed (After hours)' 
+    }
+  }
+  
+  return { isOpen: true, message: 'Market is open' }
+}
+
 export default function SettingsPanel({ settings, onSettingsChange, onClose, isRateLimited = false, readyCountdown = 0 }: SettingsPanelProps) {
   const [localSettings, setLocalSettings] = useState(settings)
   const [floatDisplayValue, setFloatDisplayValue] = useState(formatFloatHelper(settings.maxFloat))
   const [activeTab, setActiveTab] = useState<'settings' | 'faq'>('settings')
+  const [marketStatus, setMarketStatus] = useState(isMarketOpen())
+  
+  // Update market status every minute
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setMarketStatus(isMarketOpen())
+    }, 60000) // Check every minute
+    
+    return () => clearInterval(interval)
+  }, [])
   
   // Auto-update settings when API selection changes
   useEffect(() => {
@@ -396,6 +452,23 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
             API Selection
           </h3>
           <div className="space-y-3">
+            {/* Market Status */}
+            {!marketStatus.isOpen && (
+              <div className="px-3 py-2 rounded-lg bg-orange-500/10 border border-orange-500/20 mb-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-orange-400">⚠️ {marketStatus.message}</span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  APIs may return delayed/closed data. Real-time data available 9:30 AM - 4:00 PM ET (Mon-Fri)
+                </p>
+              </div>
+            )}
+            {marketStatus.isOpen && (
+              <div className="px-3 py-2 rounded-lg bg-green-500/10 border border-green-500/20 mb-2">
+                <span className="text-xs font-semibold text-green-400">✅ {marketStatus.message}</span>
+              </div>
+            )}
+            
             <p className="text-xs text-muted-foreground mb-2">
               Choose which APIs to use for stock scanning. At least one must be enabled.
             </p>
