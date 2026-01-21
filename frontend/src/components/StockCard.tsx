@@ -41,6 +41,23 @@ export default function StockCard({ stock, timeframe, onClick }: StockCardProps)
                 BUY
               </span>
             )}
+            {stock.signal === 'SELL' && (
+              <span className="px-2 py-1 text-xs font-semibold rounded-full bg-red-500/20 text-red-400">
+                SELL
+              </span>
+            )}
+            {(stock as any).detectedPattern && (
+              <span 
+                className={`px-2 py-1 text-xs font-semibold rounded-full flex items-center gap-1 ${
+                  (stock as any).detectedPattern.signal === 'BUY' 
+                    ? 'bg-gradient-to-r from-green-500/20 to-blue-500/20 text-green-300 border border-green-500/30' 
+                    : 'bg-gradient-to-r from-red-500/20 to-orange-500/20 text-red-300 border border-red-500/30'
+                }`}
+                title={(stock as any).detectedPattern.description}
+              >
+                🧠 {(stock as any).detectedPattern.name.replace(/_/g, ' ')}
+              </span>
+            )}
             {stock.hasNews && stock.newsCount && stock.newsCount > 0 && (
               <span className="px-2 py-1 text-xs font-semibold rounded-full bg-blue-500/20 text-blue-400 flex items-center gap-1">
                 <Newspaper className="w-3 h-3" />

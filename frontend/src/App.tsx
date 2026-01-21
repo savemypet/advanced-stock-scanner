@@ -7,6 +7,7 @@ import SettingsPanel from './components/SettingsPanel'
 import StockDetailModal from './components/StockDetailModal'
 import { scanStocks } from './api/stockApi'
 import { Stock, ScannerSettings } from './types'
+import { detectPatterns, getLatestSignal } from './utils/candlestickPatterns'
 import './App.css'
 
 type ViewMode = 'live' | 'simulated'
@@ -76,6 +77,42 @@ function App() {
       if (result.success) {
         const newStocks = result.stocks || []
         
+        // 🧠 AI PATTERN DETECTION: Analyze candlestick patterns on real stocks
+        const stocksWithPatterns = newStocks.map(stock => {
+          if (stock.chartData && stock.chartData[settings.chartTimeframe]) {
+            const candles = stock.chartData[settings.chartTimeframe]
+            
+            if (candles && candles.length >= 3) {
+              // Detect patterns in the chart data
+              const patterns = detectPatterns(candles)
+              const latestPattern = patterns.length > 0 ? patterns[patterns.length - 1] : null
+              
+              if (latestPattern) {
+                // Update stock signal based on detected pattern (if HIGH confidence)
+                let updatedSignal = stock.signal
+                if (latestPattern.confidence === 'HIGH') {
+                  updatedSignal = latestPattern.signal
+                } else if (latestPattern.confidence === 'MEDIUM' && !stock.signal) {
+                  updatedSignal = latestPattern.signal
+                }
+                
+                return {
+                  ...stock,
+                  signal: updatedSignal,
+                  detectedPattern: {
+                    name: latestPattern.pattern,
+                    signal: latestPattern.signal,
+                    confidence: latestPattern.confidence,
+                    description: latestPattern.description
+                  }
+                }
+              }
+            }
+          }
+          
+          return stock
+        })
+        
         // Clear rate limit if scan succeeded
         setRateLimited(false)
         setReadyTime(null)
@@ -83,17 +120,24 @@ function App() {
         
         // Check for new stocks
         if (settings.notificationsEnabled && settings.notifyOnNewStocks) {
-          const currentSymbols = new Set(newStocks.map(s => s.symbol))
+          const currentSymbols = new Set(stocksWithPatterns.map(s => s.symbol))
           const newSymbols = Array.from(currentSymbols).filter(
             symbol => !previousStocksRef.current.has(symbol)
           )
           
           if (newSymbols.length > 0 && previousStocksRef.current.size > 0) {
             newSymbols.forEach(symbol => {
-              const stock = newStocks.find(s => s.symbol === symbol)
+              const stock = stocksWithPatterns.find(s => s.symbol === symbol)
               if (stock) {
+                // Enhanced notification with pattern detection
+                let description = `${symbol} now qualifies - ${stock.changePercent.toFixed(2)}% gain`
+                if ((stock as any).detectedPattern) {
+                  const pattern = (stock as any).detectedPattern
+                  description += ` 🧠 Pattern: ${pattern.name} (${pattern.signal})`
+                }
+                
                 toast.success(`New Stock Alert!`, {
-                  description: `${symbol} now qualifies - ${stock.changePercent.toFixed(2)}% gain`
+                  description
                 })
               }
             })
@@ -102,7 +146,7 @@ function App() {
           previousStocksRef.current = currentSymbols
         }
         
-        setStocks(newStocks)
+        setStocks(stocksWithPatterns)
         setLastUpdate(new Date())
       }
     } catch (error: any) {
