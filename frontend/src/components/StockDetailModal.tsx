@@ -236,7 +236,7 @@ export default function StockDetailModal({ stock, onClose }: StockDetailModalPro
                       : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:scale-105'
                   }`}
                 >
-                  {loadingTimeframes.has(tf) ? '⏳ Loading...' : tf}
+                  {loadingTimeframes.has(tf) ? '⏳ Loading...' : getTimeframeLabel(tf)}
                 </button>
               ))}
             </div>
