@@ -34,6 +34,28 @@ A real-time stock scanner that identifies low-float, high-volume stocks with sig
 - **Persistent Rate Lock** - 🔒 Rate limit persists across refreshes! Scanner stays locked until 45-min countdown completes (saved in localStorage)
 - **Comprehensive FAQ** - 📚 Built-in Help & FAQ section (26 questions) covering charts, features, trading tips, and technical details - accessible from Settings panel
 
+## Quick Start
+
+### Windows (Easiest)
+1. **Double-click** `setup-windows.bat` to install dependencies
+2. **Double-click** `start-scanner.bat` to start the app
+3. Open browser: http://localhost:3000
+
+### Manual Setup
+```bash
+# Backend
+cd backend
+pip install -r requirements.txt
+python app.py
+
+# Frontend (new terminal)
+cd frontend
+npm install
+npm run dev
+```
+
+**📖 See [WINDOWS_SETUP.md](WINDOWS_SETUP.md) for detailed Windows instructions**
+
 ## Tech Stack
 
 ### Backend
