@@ -29,7 +29,7 @@ SCRAPERAPI_BASE_URL = 'http://api.scraperapi.com'
 SCRAPERAPI_FREE_LIMIT = 1000  # Monthly free tier limit
 
 # SerpAPI Configuration (Alternative data source when Yahoo is blocked)
-SERPAPI_KEY = 'YOUR_SERPAPI_KEY'  # Get free key from https://serpapi.com (250 searches/month free)
+SERPAPI_KEY = '76b777fb92f33e02aeff118d208fa182414297f1249715b1d262571a82ec245c'  # SerpAPI key configured ✅
 SERPAPI_BASE_URL = 'https://serpapi.com/search'
 SERPAPI_FREE_LIMIT = 250  # Monthly free tier limit
 
