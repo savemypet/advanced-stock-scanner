@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { ScannerSettings, ChartTimeframe } from '../types'
 import { X, DollarSign, TrendingUp, BarChart3, Bell, Clock, Hash, HelpCircle, Globe } from 'lucide-react'
 import FAQSection from './FAQSection'
@@ -15,6 +15,48 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
   const [localSettings, setLocalSettings] = useState(settings)
   const [floatDisplayValue, setFloatDisplayValue] = useState(formatFloatHelper(settings.maxFloat))
   const [activeTab, setActiveTab] = useState<'settings' | 'faq'>('settings')
+  
+  // Auto-update settings when API selection changes
+  useEffect(() => {
+    const hasYahoo = localSettings.useYahoo ?? true
+    const hasSerpAPI = localSettings.useSerpAPI ?? false
+    const hasAlphaVantage = localSettings.useAlphaVantage ?? false
+    const hasMassive = localSettings.useMassive ?? false
+    
+    // Calculate recommended interval
+    let recommendedInterval = 20
+    if (hasMassive || hasAlphaVantage) {
+      if (!hasYahoo && !hasSerpAPI) {
+        recommendedInterval = 60 // Only Massive/AlphaVantage: 60s
+      } else {
+        recommendedInterval = 60 // Mixed: use 60s for safety
+      }
+    } else if (hasSerpAPI && !hasYahoo) {
+      recommendedInterval = 120 // Only SerpAPI: 120s
+    } else {
+      recommendedInterval = 20 // Yahoo available: 20s
+    }
+    
+    // Calculate recommended stock count
+    let maxStocks = 10
+    if (hasMassive || hasAlphaVantage) {
+      maxStocks = 5 // 5 calls/min limit
+    } else if (hasSerpAPI && !hasYahoo) {
+      maxStocks = 10 // SerpAPI can handle 10
+    } else {
+      maxStocks = 10 // Yahoo allows 10
+    }
+    
+    // Update settings if they don't match recommendations
+    if (localSettings.updateInterval !== recommendedInterval || 
+        (localSettings.displayCount || 10) > maxStocks) {
+      setLocalSettings(prev => ({
+        ...prev,
+        updateInterval: recommendedInterval,
+        displayCount: Math.min(prev.displayCount || 10, maxStocks)
+      }))
+    }
+  }, [localSettings.useYahoo, localSettings.useSerpAPI, localSettings.useAlphaVantage, localSettings.useMassive])
 
   // Format number to K/M format
   function formatFloatHelper(value: number): string {
@@ -44,6 +86,44 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
   const handleChange = (key: keyof ScannerSettings, value: any) => {
     const newSettings = { ...localSettings, [key]: value }
     setLocalSettings(newSettings)
+    
+    // Auto-update settings when API selection changes
+    if (key === 'useYahoo' || key === 'useSerpAPI' || key === 'useAlphaVantage' || key === 'useMassive') {
+      // Calculate recommended values based on selected APIs
+      const hasYahoo = newSettings.useYahoo ?? true
+      const hasSerpAPI = newSettings.useSerpAPI ?? false
+      const hasAlphaVantage = newSettings.useAlphaVantage ?? false
+      const hasMassive = newSettings.useMassive ?? false
+      
+      // Calculate recommended interval
+      let recommendedInterval = 20
+      if (hasMassive || hasAlphaVantage) {
+        if (!hasYahoo && !hasSerpAPI) {
+          recommendedInterval = 60 // Only Massive/AlphaVantage: 60s
+        } else {
+          recommendedInterval = 60 // Mixed: use 60s for safety
+        }
+      } else if (hasSerpAPI && !hasYahoo) {
+        recommendedInterval = 120 // Only SerpAPI: 120s
+      } else {
+        recommendedInterval = 20 // Yahoo available: 20s
+      }
+      
+      // Calculate recommended stock count
+      let maxStocks = 10
+      if (hasMassive || hasAlphaVantage) {
+        maxStocks = 5 // 5 calls/min limit
+      } else if (hasSerpAPI && !hasYahoo) {
+        maxStocks = 10 // SerpAPI can handle 10
+      } else {
+        maxStocks = 10 // Yahoo allows 10
+      }
+      
+      // Auto-update the settings
+      newSettings.updateInterval = recommendedInterval
+      newSettings.displayCount = Math.min(newSettings.displayCount || 10, maxStocks)
+      setLocalSettings(newSettings)
+    }
   }
 
   const handleFloatChange = (value: string) => {
