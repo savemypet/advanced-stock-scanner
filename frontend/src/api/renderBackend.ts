@@ -47,6 +47,7 @@ export interface ScanCriteria {
   maxFloat?: number;
   minGainPercent?: number;
   volumeMultiplier?: number;
+  userId?: string; // Optional: OneSignal user ID for push notifications
 }
 
 export interface ScanResult {
@@ -75,6 +76,7 @@ export async function scanStocks(criteria: ScanCriteria): Promise<ScanResult> {
     maxFloat: criteria.maxFloat ?? 500000000,
     minGainPercent: criteria.minGainPercent ?? 2,
     volumeMultiplier: criteria.volumeMultiplier ?? 1.5,
+    userId: criteria.userId, // Optional: For push notifications when news is found
   };
 
   console.log(`📡 Scanning ${criteria.symbols.length} stocks via Render backend...`);
