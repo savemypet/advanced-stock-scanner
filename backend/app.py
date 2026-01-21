@@ -38,9 +38,9 @@ ALPHAVANTAGE_KEY = 'ED8M1QO531HEYLOS'  # AlphaVantage API key configured ✅
 ALPHAVANTAGE_BASE_URL = 'https://www.alphavantage.co/query'
 ALPHAVANTAGE_FREE_LIMIT = 25  # Daily free tier limit (25 API calls per day)
 
-# Massive.com Configuration (Fourth fallback - high frequency backup)
-MASSIVE_KEY = 'B29V_lqg13rHpwpflNgsxBimbiTVHqe9'  # Massive.com API key configured ✅
-MASSIVE_BASE_URL = 'https://api.massive.com/v1'  # Placeholder URL (adjust based on actual API docs)
+# Massive.com (Polygon.io) Configuration (Fourth fallback - high frequency backup)
+MASSIVE_KEY = 'D7IAUg_tLjplp07HtPFarTo6MX5uXgYw'  # Massive.com API key ✅
+MASSIVE_BASE_URL = 'https://api.massive.com'  # Polygon.io rebranded to Massive.com
 MASSIVE_RATE_LIMIT = 5  # Free tier: 5 API calls per minute
 MASSIVE_RATE_WINDOW = 60  # 60 seconds (1 minute)
 
@@ -460,7 +460,7 @@ def track_alphavantage_usage():
     logging.info(f"🔍 AlphaVantage call #{alphavantage_calls_used}/{ALPHAVANTAGE_FREE_LIMIT} today ({remaining} remaining)")
 
 def fetch_stock_from_massive(symbol: str) -> Dict[str, Any]:
-    """Fetch stock data from Massive.com as fourth fallback (5 calls/minute)"""
+    """Fetch stock data from Massive.com (Polygon.io) as fourth fallback (5 calls/minute)"""
     track_massive_usage()
     
     if MASSIVE_KEY == 'YOUR_MASSIVE_API_KEY':
@@ -468,25 +468,29 @@ def fetch_stock_from_massive(symbol: str) -> Dict[str, Any]:
         return None
     
     try:
-        logging.info(f"🔍 Fetching {symbol} from Massive.com...")
+        logging.info(f"🔍 Fetching {symbol} from Massive.com (Polygon.io)...")
         
-        # Massive.com API endpoint (adjust based on actual API documentation)
-        params = {
-            'symbol': symbol,
-            'apikey': MASSIVE_KEY
-        }
+        # Massive.com (Polygon.io) API - Get Previous Close for price data
+        prev_close_url = f"https://api.massive.com/v2/aggs/ticker/{symbol}/prev"
+        params = {'apiKey': MASSIVE_KEY}
         
-        response = requests.get(f"{MASSIVE_BASE_URL}/quote", params=params, timeout=10)
+        response = requests.get(prev_close_url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
         
-        # Extract data (adjust based on actual API response format)
-        current_price = float(data.get('price', 0))
-        previous_close = float(data.get('previousClose', current_price))
-        open_price = float(data.get('open', current_price))
-        day_high = float(data.get('high', current_price))
-        day_low = float(data.get('low', current_price))
-        volume = int(data.get('volume', 1000000))
+        # Check if data exists
+        if data.get('status') != 'OK' or not data.get('results'):
+            logging.warning(f"⚠️ Massive.com returned no data for {symbol}")
+            return None
+        
+        # Extract data from Polygon.io format
+        result = data['results'][0] if isinstance(data['results'], list) else data['results']
+        current_price = float(result.get('c', 0))  # Close price
+        open_price = float(result.get('o', current_price))  # Open
+        day_high = float(result.get('h', current_price))  # High
+        day_low = float(result.get('l', current_price))  # Low
+        volume = int(result.get('v', 1000000))  # Volume
+        previous_close = float(result.get('c', current_price))  # Use close as prev close
         
         change_amount = current_price - previous_close
         change_percent = (change_amount / previous_close) * 100 if previous_close > 0 else 0
