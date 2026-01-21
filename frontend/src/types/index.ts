@@ -26,10 +26,25 @@ export interface Stock {
   candles: Candle[];
   chartData?: {
     '1m'?: Candle[];
+    '2m'?: Candle[];
+    '3m'?: Candle[];
     '5m'?: Candle[];
+    '15m'?: Candle[];
+    '30m'?: Candle[];
+    '90m'?: Candle[];
     '1h'?: Candle[];
+    '4h'?: Candle[];
     '24h'?: Candle[];
+    '1week'?: Candle[];
+    '3month'?: Candle[];
+    '6month'?: Candle[];
     '1month'?: Candle[];
+    '1year'?: Candle[];
+    '2year'?: Candle[];
+    '5year'?: Candle[];
+    '10year'?: Candle[];
+    'ytd'?: Candle[];
+    'max'?: Candle[];
   };
   volumeProfile?: {
     '1m'?: { buy: number; sell: number };
@@ -53,7 +68,7 @@ export interface NewsItem {
   category: string;
 }
 
-export type ChartTimeframe = '1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '24h' | '1week' | '1month';
+export type ChartTimeframe = '1m' | '2m' | '3m' | '5m' | '15m' | '30m' | '90m' | '1h' | '4h' | '24h' | '1week' | '3month' | '6month' | '1month' | '1year' | '2year' | '5year' | '10year' | 'ytd' | 'max';
 
 export interface ScannerSettings {
   minPrice: number;

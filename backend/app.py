@@ -21,11 +21,31 @@ def generate_synthetic_candles(symbol: str, previous_close: float, current_price
     
     # Timeframe configuration: (num_candles, interval_minutes, lookback_hours, volatility_scale)
     timeframe_config = {
+        # Intraday (minutes)
         '1m': (60, 1, 1, 0.003),       # High freq, low volatility
+        '2m': (60, 2, 1, 0.004),       # 2-minute candles
         '5m': (60, 5, 5, 0.008),       # Medium freq, medium volatility
+        '15m': (60, 15, 5, 0.01),      # 15-minute candles
+        '30m': (60, 30, 5, 0.012),     # 30-minute candles
+        '90m': (60, 90, 5, 0.015),     # 90-minute candles
+        # Hourly
         '1h': (24, 60, 24, 0.02),      # Low freq, higher volatility
+        # Daily
         '24h': (30, 1440, 720, 0.05),  # Very low freq, highest volatility
-        '1month': (30, 43200, 21600, 0.08)  # Monthly candles: 30 candles, 30 days each, 6 months lookback
+        # Weekly
+        '1week': (52, 10080, 8736, 0.06),  # 52 weeks = 1 year
+        # Monthly/Quarterly
+        '1month': (30, 43200, 21600, 0.08),  # 30 monthly candles = 30 months
+        '3month': (20, 129600, 51840, 0.1),  # 20 quarterly candles = 5 years
+        # Longer periods
+        '6month': (60, 43200, 43200, 0.12),  # 60 daily candles over 6 months
+        '1year': (252, 1440, 8760, 0.15),    # 252 trading days = 1 year
+        '2year': (504, 1440, 17520, 0.18),    # 504 trading days = 2 years
+        '5year': (1260, 1440, 43800, 0.2),    # 1260 trading days = 5 years
+        '10year': (2520, 1440, 87600, 0.25), # 2520 trading days = 10 years
+        # Special
+        'ytd': (252, 1440, 8760, 0.15),       # Year-to-date (same as 1year)
+        'max': (5000, 1440, 438000, 0.3),     # Maximum history (large dataset)
     }
     
     num_candles, interval_mins, lookback_hours, volatility = timeframe_config.get(timeframe, (60, 5, 5, 0.008))
@@ -835,26 +855,54 @@ class StockScanner:
         logging.info(f"✅ Info received for {symbol}: {info.get('longName', 'N/A')}")
         
         # Get historical data based on timeframe
+        # Period: How far back to fetch data
         period_map = {
-            '1m': '1d',
-            '3m': '5d',
-            '5m': '5d',
-            '15m': '5d',
-            '30m': '5d',
-            '1h': '1mo',
-            '24h': '3mo',
-            '1month': '2y'  # 2 years to get enough monthly candles
+            # Intraday (limited to 7-60 days)
+            '1m': '1d',      # Max 7 days for 1m
+            '2m': '5d',      # Max 7 days for 2m
+            '3m': '5d',      # Max 7 days for 3m
+            '5m': '5d',      # Max 60 days for 5m
+            '15m': '5d',     # Max 60 days for 15m
+            '30m': '5d',     # Max 60 days for 30m
+            '90m': '60d',    # Max 60 days for 90m
+            '1h': '1mo',     # Max 60 days for 1h
+            # Daily and longer (full history)
+            '24h': '3mo',    # 3 months of daily data
+            '1week': 'max',  # Full history for weekly
+            '1month': '2y',  # 2 years for monthly
+            '3month': 'max', # Full history for quarterly
+            '6month': '1y',  # 1 year for 6-month view
+            '1year': '1y',   # 1 year of daily data
+            '2year': '2y',   # 2 years of daily data
+            '5year': '5y',   # 5 years of daily data
+            '10year': '10y', # 10 years of daily data
+            'ytd': 'ytd',    # Year-to-date
+            'max': 'max',    # Maximum available history
         }
         
+        # Interval: Candle size
         interval_map = {
+            # Intraday intervals
             '1m': '1m',
-            '3m': '2m',
+            '2m': '2m',
+            '3m': '2m',      # Use 2m for 3m (closest available)
             '5m': '5m',
             '15m': '15m',
             '30m': '30m',
+            '90m': '90m',
             '1h': '1h',
-            '24h': '1d',
-            '1month': '1mo'  # Monthly candles
+            # Daily and longer
+            '24h': '1d',     # Daily candles
+            '1week': '1wk',  # Weekly candles
+            '1month': '1mo', # Monthly candles
+            '3month': '3mo', # Quarterly candles
+            '6month': '1d',  # Daily candles for 6-month view
+            '1year': '1d',   # Daily candles for yearly view
+            '2year': '1d',   # Daily candles for 2-year view
+            '5year': '1d',   # Daily candles for 5-year view
+            '10year': '1d',  # Daily candles for 10-year view
+            'ytd': '1d',     # Daily candles for YTD
+            'max': '1d',     # Daily candles for max history
         }
         
         period = period_map.get(timeframe, '5d')

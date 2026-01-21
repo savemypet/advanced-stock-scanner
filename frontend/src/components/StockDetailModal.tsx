@@ -25,8 +25,34 @@ export default function StockDetailModal({ stock, onClose }: StockDetailModalPro
   const isPositive = stock.changePercent >= 0
   const volumeRatio = (stock.volume / stock.avgVolume).toFixed(2)
   
-  // All possible timeframes - let user click any of them
-  const timeframeOrder: ChartTimeframe[] = ['1m', '5m', '1h', '24h', '1month']
+  // Helper function to get readable timeframe labels
+  const getTimeframeLabel = (tf: ChartTimeframe): string => {
+    const labels: Record<ChartTimeframe, string> = {
+      '1m': '1m', '2m': '2m', '3m': '3m', '5m': '5m', '15m': '15m', '30m': '30m', '90m': '90m',
+      '1h': '1h', '4h': '4h', '24h': '1d', '1week': '1w', '1month': '1mo', '3month': '3mo',
+      '6month': '6mo', '1year': '1y', '2year': '2y', '5year': '5y', '10year': '10y',
+      'ytd': 'YTD', 'max': 'Max'
+    }
+    return labels[tf] || tf
+  }
+
+  // All possible timeframes - organized by category for better UX
+  const timeframeOrder: ChartTimeframe[] = [
+    // Intraday (minutes)
+    '1m', '2m', '5m', '15m', '30m', '90m',
+    // Hourly
+    '1h',
+    // Daily
+    '24h',
+    // Weekly
+    '1week',
+    // Monthly/Quarterly
+    '1month', '3month',
+    // Longer periods
+    '6month', '1year', '2year', '5year', '10year',
+    // Special
+    'ytd', 'max'
+  ]
   const availableTimeframes: ChartTimeframe[] = timeframeOrder
   
   // Function to change timeframe for ALL charts at once

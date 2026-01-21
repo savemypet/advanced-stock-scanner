@@ -296,14 +296,25 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
           
           // Add candle and remove oldest to maintain count
           const maxCandles = timeframe === '1m' ? 60 : 
+                            timeframe === '2m' ? 60 :
+                            timeframe === '3m' ? 60 :
                             timeframe === '5m' ? 60 : 
                             timeframe === '15m' ? 60 :
-                            timeframe === '30m' ? 60 : 
+                            timeframe === '30m' ? 60 :
+                            timeframe === '90m' ? 60 :
                             timeframe === '1h' ? 24 : 
                             timeframe === '4h' ? 42 :
                             timeframe === '24h' ? 90 :
                             timeframe === '1week' ? 52 :
-                            timeframe === '1month' ? 30 : 60  // 30 monthly candles = 30 months
+                            timeframe === '1month' ? 30 :
+                            timeframe === '3month' ? 20 :
+                            timeframe === '6month' ? 180 :
+                            timeframe === '1year' ? 252 :
+                            timeframe === '2year' ? 504 :
+                            timeframe === '5year' ? 1260 :
+                            timeframe === '10year' ? 2520 :
+                            timeframe === 'ytd' ? 252 :
+                            timeframe === 'max' ? 5000 : 60
           chartData[timeframe] = [...candles.slice(-(maxCandles - 1)), newCandle]
         } else {
           // UPDATE the current candle with new price data
