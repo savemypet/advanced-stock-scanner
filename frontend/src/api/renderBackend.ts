@@ -65,7 +65,7 @@ export async function scanStocks(criteria: ScanCriteria): Promise<ScanResult> {
     criteria.symbols = criteria.symbols.slice(0, 10);
   }
 
-  // tRPC with @hono/trpc-server works better with POST for queries with input
+  // Using mutation (supports POST requests)
   const url = `${RENDER_BACKEND_URL}/stocks.scan`;
   const input = {
     symbols: criteria.symbols,
@@ -78,7 +78,7 @@ export async function scanStocks(criteria: ScanCriteria): Promise<ScanResult> {
 
   console.log(`📡 Scanning ${criteria.symbols.length} stocks via Render backend...`);
 
-  // Try POST first (recommended for tRPC with input)
+  // Mutation supports POST requests
   const response = await fetch(url, {
     method: 'POST',
     headers: {
@@ -102,13 +102,13 @@ export async function getStockQuote(
   symbol: string,
   timeframe: '1m' | '5m' | '1h' | '24h' = '5m'
 ): Promise<StockData> {
-  // tRPC with @hono/trpc-server works better with POST for queries with input
+  // Using mutation (supports POST requests)
   const url = `${RENDER_BACKEND_URL}/stocks.getQuote`;
   const input = { symbol, timeframe };
 
   console.log(`📊 Fetching ${symbol} (${timeframe}) via Render backend...`);
 
-  // Try POST first (recommended for tRPC with input)
+  // Mutation supports POST requests
   const response = await fetch(url, {
     method: 'POST',
     headers: {
