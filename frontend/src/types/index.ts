@@ -67,6 +67,11 @@ export interface ScannerSettings {
   updateInterval: number; // seconds between updates
   notificationsEnabled: boolean;
   notifyOnNewStocks: boolean;
+  // API Selection
+  useYahoo: boolean;
+  useSerpAPI: boolean;
+  useAlphaVantage: boolean;
+  useMassive: boolean;
 }
 
 export interface ScanResult {

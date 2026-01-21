@@ -30,6 +30,10 @@ export const scanStocks = async (settings: ScannerSettings): Promise<ScanResult>
         maxFloat: settings.maxFloat,
         minGainPercent: settings.minGainPercent,
         volumeMultiplier: settings.volumeMultiplier,
+        useYahoo: settings.useYahoo,
+        useSerpAPI: settings.useSerpAPI,
+        useAlphaVantage: settings.useAlphaVantage,
+        useMassive: settings.useMassive,
       })
 
       markScanComplete() // Track last scan time

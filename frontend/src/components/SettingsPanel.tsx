@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ScannerSettings, ChartTimeframe } from '../types'
-import { X, DollarSign, TrendingUp, BarChart3, Bell, Clock, Hash, HelpCircle } from 'lucide-react'
+import { X, DollarSign, TrendingUp, BarChart3, Bell, Clock, Hash, HelpCircle, Globe } from 'lucide-react'
 import FAQSection from './FAQSection'
 
 interface SettingsPanelProps {
@@ -70,6 +70,10 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
       updateInterval: 20, // 20 seconds - fastest safe with 10 symbols
       notificationsEnabled: true,
       notifyOnNewStocks: true,
+      useYahoo: localSettings.useYahoo ?? true,
+      useSerpAPI: localSettings.useSerpAPI ?? false,
+      useAlphaVantage: localSettings.useAlphaVantage ?? false,
+      useMassive: localSettings.useMassive ?? false,
     }
     setLocalSettings(pennySettings)
     setFloatDisplayValue(formatFloatHelper(pennySettings.maxFloat))
@@ -90,6 +94,10 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
       updateInterval: 20, // 20 seconds - fastest safe with 10 symbols
       notificationsEnabled: true,
       notifyOnNewStocks: true,
+      useYahoo: localSettings.useYahoo ?? true,
+      useSerpAPI: localSettings.useSerpAPI ?? false,
+      useAlphaVantage: localSettings.useAlphaVantage ?? false,
+      useMassive: localSettings.useMassive ?? false,
     }
     setLocalSettings(defaultSettings)
     setFloatDisplayValue(formatFloatHelper(defaultSettings.maxFloat))
@@ -284,6 +292,56 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
               onChange={(v) => handleChange('notifyOnNewStocks', v)}
               disabled={!localSettings.notificationsEnabled}
             />
+          </div>
+        </section>
+
+        {/* API Selection */}
+        <section>
+          <h3 className="flex items-center gap-2 text-sm font-semibold mb-3">
+            <Globe className="w-4 h-4" />
+            API Selection
+          </h3>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground mb-2">
+              Choose which APIs to use for stock scanning. At least one must be enabled.
+            </p>
+            <div className="space-y-2">
+              <ToggleField
+                label="Yahoo Finance (Recommended)"
+                checked={localSettings.useYahoo ?? true}
+                onChange={(v) => handleChange('useYahoo', v)}
+              />
+              <p className="text-xs text-muted-foreground ml-0">Fast, reliable, high quota</p>
+            </div>
+            <div className="space-y-2">
+              <ToggleField
+                label="SerpAPI"
+                checked={localSettings.useSerpAPI ?? false}
+                onChange={(v) => handleChange('useSerpAPI', v)}
+              />
+              <p className="text-xs text-muted-foreground ml-0">250 calls/month free tier</p>
+            </div>
+            <div className="space-y-2">
+              <ToggleField
+                label="AlphaVantage"
+                checked={localSettings.useAlphaVantage ?? false}
+                onChange={(v) => handleChange('useAlphaVantage', v)}
+              />
+              <p className="text-xs text-muted-foreground ml-0">5 calls/minute, 500/day free</p>
+            </div>
+            <div className="space-y-2">
+              <ToggleField
+                label="Massive.com (Polygon.io)"
+                checked={localSettings.useMassive ?? false}
+                onChange={(v) => handleChange('useMassive', v)}
+              />
+              <p className="text-xs text-muted-foreground ml-0">5 calls/minute rate limit</p>
+            </div>
+            {(!localSettings.useYahoo && !localSettings.useSerpAPI && !localSettings.useAlphaVantage && !localSettings.useMassive) && (
+              <div className="px-3 py-2 rounded-lg bg-yellow-500/10 border border-yellow-500/20 text-xs text-yellow-600 dark:text-yellow-400">
+                ⚠️ At least one API must be enabled
+              </div>
+            )}
           </div>
         </section>
 

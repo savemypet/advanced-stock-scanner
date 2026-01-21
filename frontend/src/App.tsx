@@ -44,6 +44,11 @@ function App() {
     updateInterval: 20, // SMART: 20s with Yahoo/SerpAPI/AlphaVantage, auto-adjusts to 60s when only Massive.com available
     notificationsEnabled: true,
     notifyOnNewStocks: true,
+    // API Selection - Default: Yahoo only (most reliable)
+    useYahoo: true,
+    useSerpAPI: false,
+    useAlphaVantage: false,
+    useMassive: false,
   })
 
   // Check for saved rate limit on mount AND verify with backend

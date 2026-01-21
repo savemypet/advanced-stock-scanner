@@ -48,6 +48,10 @@ export interface ScanCriteria {
   minGainPercent?: number;
   volumeMultiplier?: number;
   userId?: string; // Optional: OneSignal user ID for push notifications
+  useYahoo?: boolean;
+  useSerpAPI?: boolean;
+  useAlphaVantage?: boolean;
+  useMassive?: boolean;
 }
 
 export interface ScanResult {
@@ -77,6 +81,11 @@ export async function scanStocks(criteria: ScanCriteria): Promise<ScanResult> {
     minGainPercent: criteria.minGainPercent ?? 2,
     volumeMultiplier: criteria.volumeMultiplier ?? 1.5,
     userId: criteria.userId, // Optional: For push notifications when news is found
+    // API Selection
+    useYahoo: criteria.useYahoo ?? true,
+    useSerpAPI: criteria.useSerpAPI ?? false,
+    useAlphaVantage: criteria.useAlphaVantage ?? false,
+    useMassive: criteria.useMassive ?? false,
   };
 
   console.log(`📡 Scanning ${criteria.symbols.length} stocks via Render backend...`);
