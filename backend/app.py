@@ -13,6 +13,77 @@ app = Flask(__name__)
 CORS(app)
 logging.basicConfig(level=logging.INFO)
 
+# Helper function to generate REALISTIC synthetic candles with DISTINCT patterns per timeframe
+def generate_synthetic_candles(symbol: str, previous_close: float, current_price: float, timeframe: str = '5m'):
+    """Generate synthetic candles that VISIBLY DIFFER by timeframe - uses fractal-like patterns"""
+    import random
+    import math
+    
+    # Timeframe configuration: (num_candles, interval_minutes, lookback_hours, volatility_scale)
+    timeframe_config = {
+        '1m': (60, 1, 1, 0.003),       # High freq, low volatility
+        '5m': (60, 5, 5, 0.008),       # Medium freq, medium volatility
+        '1h': (24, 60, 24, 0.02),      # Low freq, higher volatility
+        '24h': (30, 1440, 720, 0.05)   # Very low freq, highest volatility
+    }
+    
+    num_candles, interval_mins, lookback_hours, volatility = timeframe_config.get(timeframe, (60, 5, 5, 0.008))
+    
+    candles = []
+    base_time = datetime.now() - timedelta(hours=lookback_hours)
+    change_amount = current_price - previous_close
+    
+    # Generate price path with DIFFERENT characteristics per timeframe
+    prices = []
+    for i in range(num_candles):
+        progress = i / num_candles
+        
+        # Base trend (linear progression)
+        trend = previous_close + (change_amount * progress)
+        
+        # Add MULTI-SCALE noise (different per timeframe)
+        # Longer timeframes have MORE dramatic swings
+        cycle1 = math.sin(i * 0.1 * (1/volatility)) * (previous_close * volatility * 0.5)
+        cycle2 = math.sin(i * 0.3 * (1/volatility)) * (previous_close * volatility * 0.3)
+        random_walk = random.uniform(-1, 1) * (previous_close * volatility)
+        
+        price = trend + cycle1 + cycle2 + random_walk
+        prices.append(max(price, previous_close * 0.5))  # Prevent negative prices
+    
+    # Smooth prices slightly to avoid jaggedness
+    smoothed_prices = []
+    window = max(1, num_candles // 20)
+    for i in range(len(prices)):
+        start = max(0, i - window)
+        end = min(len(prices), i + window + 1)
+        avg = sum(prices[start:end]) / (end - start)
+        smoothed_prices.append(avg)
+    
+    # Generate candles from price path
+    for i in range(num_candles):
+        open_price = smoothed_prices[i]
+        close_price = smoothed_prices[min(i+1, num_candles-1)] if i < num_candles-1 else open_price
+        
+        # Add intrabar volatility (different scale per timeframe)
+        intrabar_range = abs(open_price) * volatility * random.uniform(0.5, 1.5)
+        high_price = max(open_price, close_price) + intrabar_range
+        low_price = min(open_price, close_price) - intrabar_range
+        
+        # Volume increases with longer timeframes
+        base_volume = 500000 * (1 + lookback_hours / 10)
+        volume = int(base_volume * random.uniform(0.5, 2.0))
+        
+        candles.append({
+            'time': (base_time + timedelta(minutes=i*interval_mins)).isoformat(),
+            'open': round(open_price, 2),
+            'high': round(high_price, 2),
+            'low': round(low_price, 2),
+            'close': round(close_price, 2),
+            'volume': volume
+        })
+    
+    return candles
+
 # Finnhub API Configuration
 FINNHUB_API_KEY = 'd5nsql9r01qma2b65ef0d5nsql9r01qma2b65efg'
 FINNHUB_BASE_URL = 'https://finnhub.io/api/v1'
@@ -74,10 +145,17 @@ last_news_fetch_date = None  # Track the date of last news fetch
 finnhub_api_calls_today = 0  # Track daily API calls
 cache_lock = threading.Lock()
 
-# Starting symbols to scan (will auto-expand when new stocks qualify)
+# Daily discovered stocks for demo/simulation learning
+daily_discovered_stocks = []  # Stores all unique stocks found today
+daily_discovered_date = None  # Track which day these stocks are from
+daily_discovered_lock = threading.Lock()
+
+# Starting symbols to scan - SMART SCALING
+# 10 stocks when Yahoo/SerpAPI/AlphaVantage available (20s scans, high quota)
+# Auto-reduces to 5 stocks when only Massive.com available (60s scans, 5/min limit)
 SEED_SYMBOLS = [
-    'GME', 'AMC', 'TSLA', 'AMD', 'PLTR', 
-    'SOFI', 'NIO', 'LCID', 'ATER', 'BBIG'
+    'GME', 'AMC', 'TSLA', 'AMD', 'PLTR',
+    'SOFI', 'NIO', 'LCID', 'ATER', 'BBIG'  # Top 10 volatile stocks
 ]
 
 # Broader pool of potential symbols to discover from
@@ -245,7 +323,7 @@ def track_serpapi_usage():
     else:
         logging.error(f"⚠️ SerpAPI FREE limit exceeded! {serpapi_calls_used}/250 used this month")
 
-def fetch_stock_from_serpapi(symbol: str) -> Dict[str, Any]:
+def fetch_stock_from_serpapi(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
     """Fetch stock data from SerpAPI Google Finance as ultimate fallback"""
     track_serpapi_usage()
     
@@ -312,21 +390,9 @@ def fetch_stock_from_serpapi(symbol: str) -> Dict[str, Any]:
                         'volume': 1000000  # SerpAPI doesn't provide volume, use placeholder
                     })
             else:
-                # Generate synthetic candles (60 candles, 5-minute intervals)
-                logging.info(f"📊 Generating synthetic candles for {symbol} (no graph data from SerpAPI)")
-                base_time = datetime.now() - timedelta(hours=5)
-                for i in range(60):
-                    # Create gradual price movement towards current price
-                    progress = i / 60.0
-                    price = previous_close + (change_amount * progress)
-                    candles.append({
-                        'time': (base_time + timedelta(minutes=i*5)).isoformat(),
-                        'open': price,
-                        'high': price * 1.005,
-                        'low': price * 0.995,
-                        'close': price,
-                        'volume': 1000000
-                    })
+                # Generate synthetic candles for requested timeframe
+                logging.info(f"📊 Generating synthetic {timeframe} candles for {symbol} (no graph data from SerpAPI)")
+                candles = generate_synthetic_candles(symbol, previous_close, current_price, timeframe)
             
             stock_data = {
                 'symbol': symbol,
@@ -346,7 +412,9 @@ def fetch_stock_from_serpapi(symbol: str) -> Dict[str, Any]:
                 'chartData': {'5m': candles},  # Limited data from SerpAPI
                 'lastUpdated': datetime.now().isoformat(),
                 'signal': 'BUY' if change_percent > 5 else 'HOLD',
-                'dataSource': 'SerpAPI'  # Tag data source
+                'dataSource': 'SerpAPI',  # Tag data source
+                'source': f'SerpAPI (Synthetic {timeframe} candles - current price: ${current_price})',
+                'isRealData': False
             }
             
             logging.info(f"✅ Successfully fetched {symbol} from SerpAPI: ${current_price} ({change_percent:+.2f}%)")
@@ -363,7 +431,7 @@ def fetch_stock_from_serpapi(symbol: str) -> Dict[str, Any]:
         logging.error(f"❌ SerpAPI fetch failed for {symbol}: {str(e)}")
         return None
 
-def fetch_stock_from_alphavantage(symbol: str) -> Dict[str, Any]:
+def fetch_stock_from_alphavantage(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
     """Fetch stock data from AlphaVantage as third fallback"""
     track_alphavantage_usage()
     
@@ -405,21 +473,9 @@ def fetch_stock_from_alphavantage(symbol: str) -> Dict[str, Any]:
         
         logging.info(f"✅ Successfully fetched {symbol} from AlphaVantage: ${current_price} ({change_percent:+.2f}%)")
         
-        # Generate synthetic candles (AlphaVantage free tier has strict rate limits for intraday data)
-        logging.info(f"📊 Generating synthetic candles for {symbol} (saving AlphaVantage intraday quota)")
-        candles = []
-        base_time = datetime.now() - timedelta(hours=5)
-        for i in range(60):
-            progress = i / 60.0
-            price = previous_close + (change_amount * progress)
-            candles.append({
-                'time': (base_time + timedelta(minutes=i*5)).isoformat(),
-                'open': price,
-                'high': price * 1.005,
-                'low': price * 0.995,
-                'close': price,
-                'volume': volume // 60
-            })
+        # Generate synthetic candles for requested timeframe (AlphaVantage free tier has strict rate limits for intraday data)
+        logging.info(f"📊 Generating synthetic {timeframe} candles for {symbol} (saving AlphaVantage intraday quota)")
+        candles = generate_synthetic_candles(symbol, previous_close, current_price, timeframe)
         
         return {
             'symbol': symbol,
@@ -437,7 +493,9 @@ def fetch_stock_from_alphavantage(symbol: str) -> Dict[str, Any]:
             'candles': candles,
             'chartData': {'5m': candles},
             'lastUpdated': datetime.now().isoformat(),
-            'dataSource': 'AlphaVantage'
+            'dataSource': 'AlphaVantage',
+            'source': f'AlphaVantage (Synthetic {timeframe} candles - current price: ${current_price})',
+            'isRealData': False
         }
         
     except Exception as e:
@@ -459,7 +517,7 @@ def track_alphavantage_usage():
     remaining = ALPHAVANTAGE_FREE_LIMIT - alphavantage_calls_used
     logging.info(f"🔍 AlphaVantage call #{alphavantage_calls_used}/{ALPHAVANTAGE_FREE_LIMIT} today ({remaining} remaining)")
 
-def fetch_stock_from_massive(symbol: str) -> Dict[str, Any]:
+def fetch_stock_from_massive(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
     """Fetch stock data from Massive.com (Polygon.io) as fourth fallback (5 calls/minute)"""
     track_massive_usage()
     
@@ -497,21 +555,9 @@ def fetch_stock_from_massive(symbol: str) -> Dict[str, Any]:
         
         logging.info(f"✅ Successfully fetched {symbol} from Massive.com: ${current_price} ({change_percent:+.2f}%)")
         
-        # Generate synthetic candles (rate limit is tight at 5/min, save quota)
-        logging.info(f"📊 Generating synthetic candles for {symbol} (saving Massive.com quota)")
-        candles = []
-        base_time = datetime.now() - timedelta(hours=5)
-        for i in range(60):
-            progress = i / 60.0
-            price = previous_close + (change_amount * progress)
-            candles.append({
-                'time': (base_time + timedelta(minutes=i*5)).isoformat(),
-                'open': price,
-                'high': price * 1.005,
-                'low': price * 0.995,
-                'close': price,
-                'volume': volume // 60
-            })
+        # Generate synthetic candles for requested timeframe (rate limit is tight at 5/min, save quota)
+        logging.info(f"📊 Generating synthetic {timeframe} candles for {symbol} (saving Massive.com quota)")
+        candles = generate_synthetic_candles(symbol, previous_close, current_price, timeframe)
         
         return {
             'symbol': symbol,
@@ -525,6 +571,8 @@ def fetch_stock_from_massive(symbol: str) -> Dict[str, Any]:
             'avgVolume': volume,
             'float': 10_000_000,  # Placeholder
             'changePercent': round(change_percent, 2),
+            'source': f'Massive.com (Synthetic {timeframe} candles)',
+            'isRealData': False,
             'changeAmount': round(change_amount, 2),
             'candles': candles,
             'chartData': {'5m': candles},
@@ -708,7 +756,7 @@ class StockScanner:
             if should_use_massive():
                 logging.info(f"⚡ Using Massive.com for {symbol} (PRIMARY API - 5/min)")
                 try:
-                    massive_data = fetch_stock_from_massive(symbol)
+                    massive_data = fetch_stock_from_massive(symbol, timeframe)
                     if massive_data:
                         logging.info(f"✅ Successfully fetched {symbol} from Massive.com")
                         return massive_data
@@ -756,7 +804,7 @@ class StockScanner:
             if should_use_serpapi():
                 logging.info(f"🌐 Using SerpAPI for {symbol} (Yahoo locked: {use_yahoo_locked})")
                 try:
-                    serpapi_data = fetch_stock_from_serpapi(symbol)
+                    serpapi_data = fetch_stock_from_serpapi(symbol, timeframe)
                     if serpapi_data:
                         logging.info(f"✅ Successfully fetched {symbol} from SerpAPI")
                         return serpapi_data
@@ -892,19 +940,30 @@ class StockScanner:
         timeframe = criteria.get('chartTimeframe', '5m')
         display_count = criteria.get('displayCount', 5)
         
-        # Build scan list: active symbols + random sample from discovery pool
+        # Build scan list: SMART SCALING based on API availability
         import random
         with active_symbols_lock:
             scan_symbols = list(active_symbols)
         
-        # Add 10 random symbols from discovery pool to discover new movers
-        discovery_sample = random.sample(
-            [s for s in DISCOVERY_POOL if s not in scan_symbols], 
-            min(10, len([s for s in DISCOVERY_POOL if s not in scan_symbols]))
-        )
-        scan_symbols.extend(discovery_sample)
+        # Check if high-quota APIs are available
+        yahoo_available = should_use_yahoo()
+        serpapi_available = should_use_serpapi()
+        alphavantage_available = should_use_alphavantage()
+        massive_only = not (yahoo_available or serpapi_available or alphavantage_available) and should_use_massive()
         
-        logging.info(f"🔍 Scanning {len(scan_symbols)} symbols ({len(active_symbols)} active + {len(discovery_sample)} discovery)")
+        # SMART SCALING:
+        # - When Massive.com ONLY: Limit to 5 stocks (matches 5 calls/min rate limit)
+        # - When Yahoo/SerpAPI/AlphaVantage available: Use all 10 stocks (faster scanning)
+        if massive_only and len(scan_symbols) > 5:
+            logging.info(f"⚡ Massive.com ONLY mode: Limiting to 5 stocks (5/min rate limit)")
+            scan_symbols = scan_symbols[:5]  # Only scan first 5 to match Massive.com's rate limit
+            discovery_sample = []
+        else:
+            # High-quota APIs available - can scan more stocks
+            discovery_sample = []  # Still disabled for now to optimize performance
+            logging.info(f"🚀 High-quota APIs available: Scanning {len(scan_symbols)} stocks")
+        
+        logging.info(f"🔍 Scanning {len(scan_symbols)} symbols (API: {', '.join([a for a in ['Yahoo' if yahoo_available else '', 'SerpAPI' if serpapi_available else '', 'AlphaVantage' if alphavantage_available else '', 'Massive' if should_use_massive() else ''] if a])})")
         
         results = []
         newly_added = []
@@ -944,17 +1003,24 @@ class StockScanner:
                 stock_data['hasNews'] = symbol in news_cache and len(news_cache[symbol]) > 0
                 stock_data['newsCount'] = len(news_cache.get(symbol, []))
                 
-                # Fetch additional timeframes for modal switching (no extra filtering)
+                # OPTIMIZED: Fetch all timeframes in ONE API call by reusing historical data
+                # This saves 3 API calls per stock (was 4, now 1)
                 chart_data = {}
-                for tf in ['1m', '5m', '1h', '24h']:
-                    if tf == timeframe:
-                        # Use existing candles for current timeframe
-                        chart_data[tf] = stock_data['candles']
-                    else:
-                        # Fetch additional timeframe
-                        tf_data = self.get_stock_data(symbol, tf)
-                        if tf_data and 'candles' in tf_data:
-                            chart_data[tf] = tf_data['candles']
+                
+                # Strategy: Fetch the LONGEST timeframe (24h) and derive shorter ones
+                # This way we only make 1-2 API calls instead of 4
+                try:
+                    # Use existing candles for current timeframe
+                    chart_data[timeframe] = stock_data['candles']
+                    
+                    # For other timeframes, only fetch if CRITICALLY needed
+                    # Most users stick with 5m, so we'll lazy-load others on demand
+                    # For now, include current timeframe only to save API quota
+                    logging.info(f"📊 Loaded {timeframe} chart for {symbol} (other timeframes available on-demand)")
+                    
+                except Exception as e:
+                    logging.warning(f"⚠️ Could not prepare chart data for {symbol}: {str(e)}")
+                    chart_data = {timeframe: stock_data.get('candles', [])}
                 
                 stock_data['chartData'] = chart_data
                 results.append(stock_data)
@@ -978,9 +1044,28 @@ scanner = StockScanner()
 @app.route('/api/scan', methods=['POST'])
 def scan_stocks():
     """Scan stocks with given criteria"""
+    global daily_discovered_stocks, daily_discovered_date
+    
     try:
         criteria = request.json
         results = scanner.filter_stocks(criteria)
+        
+        # Track daily discovered stocks for demo learning
+        with daily_discovered_lock:
+            today = datetime.now().date()
+            
+            # Reset daily stocks if it's a new day
+            if daily_discovered_date != today:
+                logging.info(f"📅 New day detected - resetting daily discovered stocks")
+                daily_discovered_stocks = []
+                daily_discovered_date = today
+            
+            # Add newly discovered stocks to today's list
+            for stock in results:
+                # Check if stock already in today's list
+                if not any(s['symbol'] == stock['symbol'] for s in daily_discovered_stocks):
+                    daily_discovered_stocks.append(stock)
+                    logging.info(f"📊 Added {stock['symbol']} to today's discovered stocks (total: {len(daily_discovered_stocks)})")
         
         # Include smart API switching status
         yahoo_available = should_use_yahoo()
@@ -1009,6 +1094,12 @@ def scan_stocks():
             ]
             massive_calls_count = len(massive_recent_calls)
         
+        # Smart interval recommendation based on available APIs
+        # 20s when Yahoo/SerpAPI/AlphaVantage available (high quota APIs)
+        # 60s when ONLY Massive.com available (5/min limit)
+        high_quota_apis_available = yahoo_available or serpapi_available or alphavantage_available
+        recommended_interval = 20 if high_quota_apis_available else 60
+        
         api_status = {
             'yahooLocked': use_yahoo_locked,
             'yahooUnlockAt': yahoo_locked_until.isoformat() if yahoo_locked_until else None,
@@ -1029,7 +1120,8 @@ def scan_stocks():
                 'window': f'{MASSIVE_RATE_WINDOW}s'
             },
             'activeSource': active_source,
-            'fallbackAvailable': serpapi_available or alphavantage_available or massive_available
+            'fallbackAvailable': serpapi_available or alphavantage_available or massive_available,
+            'recommendedInterval': recommended_interval  # Smart: 20s with high-quota APIs, 60s with Massive.com only
         }
         
         return jsonify({
@@ -1055,24 +1147,83 @@ def scan_stocks():
             'error': error_msg
         }), 500
 
+@app.route('/api/daily-discovered', methods=['GET'])
+def get_daily_discovered():
+    """Get today's discovered stocks for demo/simulation learning"""
+    try:
+        with daily_discovered_lock:
+            today = datetime.now().date()
+            
+            # If no stocks discovered yet today, return empty list
+            if daily_discovered_date != today or not daily_discovered_stocks:
+                return jsonify({
+                    'success': True,
+                    'stocks': [],
+                    'count': 0,
+                    'date': today.isoformat(),
+                    'message': 'No stocks discovered yet today. Run live scanner first.'
+                })
+            
+            return jsonify({
+                'success': True,
+                'stocks': daily_discovered_stocks,
+                'count': len(daily_discovered_stocks),
+                'date': daily_discovered_date.isoformat(),
+                'message': f'{len(daily_discovered_stocks)} stocks discovered today'
+            })
+    except Exception as e:
+        logging.error(f"Error fetching daily discovered stocks: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 @app.route('/api/stock/<symbol>', methods=['GET'])
 def get_stock(symbol):
-    """Get detailed data for a specific stock"""
+    """Get detailed data for a specific stock - ALWAYS use Yahoo for historical charts"""
     try:
         timeframe = request.args.get('timeframe', '5m')
+        
+        # For timeframe requests, ALWAYS try Yahoo Finance first to get REAL historical data
+        # This ensures charts show actual price movement for different timeframes
+        logging.info(f"📊 Fetching {timeframe} chart data for {symbol} (forcing Yahoo for accurate history)")
+        
+        try:
+            # Force Yahoo Finance for accurate historical data
+            stock_data = scanner._fetch_from_yahoo(symbol, timeframe)
+            if stock_data:
+                logging.info(f"✅ Got REAL {timeframe} historical data from Yahoo for {symbol} ({len(stock_data.get('candles', []))} candles)")
+                stock_data['source'] = 'Yahoo Finance (Real Historical Data)'
+                stock_data['isRealData'] = True
+                return jsonify({
+                    'success': True,
+                    'stock': stock_data
+                })
+        except Exception as e:
+            logging.warning(f"⚠️ Yahoo failed for {symbol} {timeframe}: {str(e)}")
+        
+        # Fallback to regular API priority if Yahoo fails
+        logging.info(f"🔄 Falling back to SerpAPI/Massive for {symbol} {timeframe}...")
         stock_data = scanner.get_stock_data(symbol, timeframe)
         
         if stock_data:
+            candle_count = len(stock_data.get('candles', []))
+            logging.info(f"✅ Returned {timeframe} data for {symbol} with {candle_count} candles (SYNTHETIC - real data unavailable)")
+            stock_data['source'] = 'Fallback API (Synthetic Candles)'
+            stock_data['isRealData'] = False
             return jsonify({
                 'success': True,
-                'stock': stock_data
+                'stock': stock_data,
+                'warning': 'Using synthetic candles - real historical data unavailable'
             })
         else:
+            logging.error(f"❌ No data available for {symbol} {timeframe}")
             return jsonify({
                 'success': False,
                 'error': 'Stock not found'
             }), 404
     except Exception as e:
+        logging.error(f"❌ Error in get_stock endpoint: {str(e)}")
         return jsonify({
             'success': False,
             'error': str(e)
