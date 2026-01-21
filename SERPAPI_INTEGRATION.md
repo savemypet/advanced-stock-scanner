@@ -24,7 +24,7 @@ Your stock scanner now has **3 layers of data sources** to ensure you always get
 
 ### **Layer 3: SerpAPI Google Finance** 🔍 BACKUP #2 (NEW!)
 - **Source:** Google Finance via SerpAPI
-- **Cost:** FREE tier (100 calls/month)
+- **Cost:** FREE tier (250 calls/month)
 - **Speed:** FAST (1-2 seconds)
 - **Data:** Basic (price, change, limited history)
 - **Reliability:** VERY HIGH, enterprise-grade API
@@ -138,7 +138,7 @@ python app.py
 |--------|-----------|--------------|------------|
 | Yahoo Finance | ~2000/hour | Hourly | FREE always |
 | ScraperAPI | 1000 calls | Monthly | $29/month (5k calls) |
-| SerpAPI | 100 calls | Monthly | $50/month (5k calls) |
+| SerpAPI | 250 calls | Monthly | $50/month (5k calls) |
 
 ### **Conservative Usage Strategy:**
 
@@ -150,7 +150,7 @@ python app.py
 ```
 Yahoo: 50,000 requests ✅ (always free)
 ScraperAPI: 200 requests ✅ (under 1000 limit)
-SerpAPI: 20 requests ✅ (under 100 limit)
+SerpAPI: 50 requests ✅ (under 250 limit)
 
 Total Cost: $0 🎉
 ```
@@ -256,7 +256,7 @@ Backend Log:
 Request: SerpAPI Google Finance
 Status: Success ✅
 Data: Limited (price, change, basic candles)
-SerpAPI calls: 1/100 used
+SerpAPI calls: 1/250 used
 Cost: $0
 
 Result: User gets TSLA data! 🎉
@@ -272,7 +272,7 @@ Note: Limited data, but better than nothing
 Backend logs show usage:
 ```
 📊 ScraperAPI usage: 450/1000 this month (550 remaining)
-🔍 SerpAPI usage: 25/100 this month (75 remaining)
+🔍 SerpAPI usage: 65/250 this month (185 remaining)
 ```
 
 ### **2. Rate Limit Wisely**
@@ -296,9 +296,9 @@ displayCount: 5,     # Show top 5 (not 50)
 Know your limits:
 - Yahoo: Free unlimited (but rate limits hourly)
 - ScraperAPI: 1000/month free
-- SerpAPI: 100/month free
+- SerpAPI: 250/month free
 
-**Total monthly capacity:** ~31,000 requests before paying anything!
+**Total monthly capacity:** ~51,000+ requests before paying anything!
 
 ---
 
@@ -343,7 +343,7 @@ User: Waits for next scan cycle
 # SerpAPI Configuration
 SERPAPI_KEY = 'your_actual_key_here'  # 👈 ADD YOUR KEY HERE
 SERPAPI_BASE_URL = 'https://serpapi.com/search'
-SERPAPI_FREE_LIMIT = 100  # Monthly free tier limit
+SERPAPI_FREE_LIMIT = 250  # Monthly free tier limit
 
 # Tracking
 serpapi_calls_used = 0
@@ -381,7 +381,7 @@ return data  # Always returns something!
 
 ✅ **SerpAPI as ultimate backup** when Yahoo + ScraperAPI fail
 
-✅ **100 free calls per month** from SerpAPI (sufficient for emergencies)
+✅ **250 free calls per month** from SerpAPI (sufficient for emergencies)
 
 ✅ **Automatic failover** - no manual intervention needed
 
@@ -409,4 +409,4 @@ return data  # Always returns something!
 
 *Documentation: January 21, 2026*
 *SerpAPI Integration: Fully Implemented*
-*Free Tier: 100 calls/month*
+*Free Tier: 250 calls/month*

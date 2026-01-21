@@ -29,9 +29,9 @@ SCRAPERAPI_BASE_URL = 'http://api.scraperapi.com'
 SCRAPERAPI_FREE_LIMIT = 1000  # Monthly free tier limit
 
 # SerpAPI Configuration (Alternative data source when Yahoo is blocked)
-SERPAPI_KEY = 'YOUR_SERPAPI_KEY'  # Get free key from https://serpapi.com (100 searches/month free)
+SERPAPI_KEY = 'YOUR_SERPAPI_KEY'  # Get free key from https://serpapi.com (250 searches/month free)
 SERPAPI_BASE_URL = 'https://serpapi.com/search'
-SERPAPI_FREE_LIMIT = 100  # Monthly free tier limit
+SERPAPI_FREE_LIMIT = 250  # Monthly free tier limit
 
 # Proxy mode tracking
 use_proxy_mode = False  # Switch to True when Yahoo blocks us
@@ -160,9 +160,9 @@ def track_serpapi_usage():
     remaining = SERPAPI_FREE_LIMIT - serpapi_calls_used
     
     if serpapi_calls_used <= SERPAPI_FREE_LIMIT:
-        logging.info(f"🔍 SerpAPI call #{serpapi_calls_used}/100 this month ({remaining} remaining)")
+        logging.info(f"🔍 SerpAPI call #{serpapi_calls_used}/250 this month ({remaining} remaining)")
     else:
-        logging.error(f"⚠️ SerpAPI FREE limit exceeded! {serpapi_calls_used}/100 used this month")
+        logging.error(f"⚠️ SerpAPI FREE limit exceeded! {serpapi_calls_used}/250 used this month")
 
 def fetch_stock_from_serpapi(symbol: str) -> Dict[str, Any]:
     """Fetch stock data from SerpAPI Google Finance as ultimate fallback"""
