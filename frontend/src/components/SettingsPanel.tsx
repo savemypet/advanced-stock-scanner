@@ -57,20 +57,101 @@ function isMarketOpen(): { isOpen: boolean; message: string } {
   return { isOpen: true, message: 'Market is open' }
 }
 
+// Helper function to check API lockout status
+function getApiLockoutStatus(): Record<string, { locked: boolean; unlockAt: number | null }> {
+  const lockouts: Record<string, { locked: boolean; unlockAt: number | null }> = {
+    yahoo: { locked: false, unlockAt: null },
+    serpapi: { locked: false, unlockAt: null },
+    alphavantage: { locked: false, unlockAt: null },
+    massive: { locked: false, unlockAt: null },
+  }
+  
+  const now = Date.now()
+  const LOCKOUT_DURATION = 24 * 60 * 60 * 1000 // 24 hours in milliseconds
+  
+  // Check localStorage for lockout timestamps
+  const yahooLockout = localStorage.getItem('api_lockout_yahoo')
+  const serpapiLockout = localStorage.getItem('api_lockout_serpapi')
+  const alphavantageLockout = localStorage.getItem('api_lockout_alphavantage')
+  const massiveLockout = localStorage.getItem('api_lockout_massive')
+  
+  if (yahooLockout) {
+    const unlockTime = parseInt(yahooLockout)
+    if (now < unlockTime) {
+      lockouts.yahoo = { locked: true, unlockAt: unlockTime }
+    } else {
+      localStorage.removeItem('api_lockout_yahoo')
+    }
+  }
+  
+  if (serpapiLockout) {
+    const unlockTime = parseInt(serpapiLockout)
+    if (now < unlockTime) {
+      lockouts.serpapi = { locked: true, unlockAt: unlockTime }
+    } else {
+      localStorage.removeItem('api_lockout_serpapi')
+    }
+  }
+  
+  if (alphavantageLockout) {
+    const unlockTime = parseInt(alphavantageLockout)
+    if (now < unlockTime) {
+      lockouts.alphavantage = { locked: true, unlockAt: unlockTime }
+    } else {
+      localStorage.removeItem('api_lockout_alphavantage')
+    }
+  }
+  
+  if (massiveLockout) {
+    const unlockTime = parseInt(massiveLockout)
+    if (now < unlockTime) {
+      lockouts.massive = { locked: true, unlockAt: unlockTime }
+    } else {
+      localStorage.removeItem('api_lockout_massive')
+    }
+  }
+  
+  return lockouts
+}
+
+// Helper function to lock an API for 24 hours
+export function lockApi(apiName: 'yahoo' | 'serpapi' | 'alphavantage' | 'massive') {
+  const unlockTime = Date.now() + (24 * 60 * 60 * 1000) // 24 hours from now
+  localStorage.setItem(`api_lockout_${apiName}`, unlockTime.toString())
+}
+
 export default function SettingsPanel({ settings, onSettingsChange, onClose, isRateLimited = false, readyCountdown = 0 }: SettingsPanelProps) {
   const [localSettings, setLocalSettings] = useState(settings)
   const [floatDisplayValue, setFloatDisplayValue] = useState(formatFloatHelper(settings.maxFloat))
   const [activeTab, setActiveTab] = useState<'settings' | 'faq'>('settings')
   const [marketStatus, setMarketStatus] = useState(isMarketOpen())
+  const [apiLockouts, setApiLockouts] = useState(getApiLockoutStatus())
   
   // Update market status every minute
   useEffect(() => {
     const interval = setInterval(() => {
       setMarketStatus(isMarketOpen())
+      setApiLockouts(getApiLockoutStatus()) // Also update lockout status
     }, 60000) // Check every minute
     
     return () => clearInterval(interval)
   }, [])
+  
+  // Format time remaining until unlock
+  const getTimeUntilUnlock = (unlockAt: number | null): string => {
+    if (!unlockAt) return ''
+    const now = Date.now()
+    const remaining = unlockAt - now
+    if (remaining <= 0) return ''
+    
+    const hours = Math.floor(remaining / (60 * 60 * 1000))
+    const minutes = Math.floor((remaining % (60 * 60 * 1000)) / (60 * 1000))
+    
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`
+    }
+    return `${minutes}m`
+  }
   
   // Auto-update settings when API selection changes
   useEffect(() => {
@@ -535,11 +616,22 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
             })()}
             
             <div className="space-y-2">
-              <ToggleField
-                label="Yahoo Finance (Recommended)"
-                checked={localSettings.useYahoo ?? true}
-                onChange={(v) => handleChange('useYahoo', v)}
-              />
+              <div className="flex items-center justify-between">
+                <ToggleField
+                  label="Yahoo Finance (Recommended)"
+                  checked={localSettings.useYahoo ?? true}
+                  onChange={(v) => handleChange('useYahoo', v)}
+                  disabled={apiLockouts.yahoo.locked}
+                />
+                {apiLockouts.yahoo.locked && (
+                  <span className="text-xs font-semibold text-red-400">
+                    🔒 Locked ({getTimeUntilUnlock(apiLockouts.yahoo.unlockAt)})
+                  </span>
+                )}
+              </div>
+              {apiLockouts.yahoo.locked && (
+                <p className="text-xs text-red-400 ml-0">Rate limited - Available in {getTimeUntilUnlock(apiLockouts.yahoo.unlockAt)}</p>
+              )}
               <div className="flex items-center justify-between ml-0">
                 <p className="text-xs text-muted-foreground">Fast, reliable, high quota</p>
                 <div className="flex items-center gap-2">
@@ -549,11 +641,22 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
               </div>
             </div>
             <div className="space-y-2">
-              <ToggleField
-                label="SerpAPI"
-                checked={localSettings.useSerpAPI ?? false}
-                onChange={(v) => handleChange('useSerpAPI', v)}
-              />
+              <div className="flex items-center justify-between">
+                <ToggleField
+                  label="SerpAPI"
+                  checked={localSettings.useSerpAPI ?? false}
+                  onChange={(v) => handleChange('useSerpAPI', v)}
+                  disabled={apiLockouts.serpapi.locked}
+                />
+                {apiLockouts.serpapi.locked && (
+                  <span className="text-xs font-semibold text-red-400">
+                    🔒 Locked ({getTimeUntilUnlock(apiLockouts.serpapi.unlockAt)})
+                  </span>
+                )}
+              </div>
+              {apiLockouts.serpapi.locked && (
+                <p className="text-xs text-red-400 ml-0">Rate limited - Available in {getTimeUntilUnlock(apiLockouts.serpapi.unlockAt)}</p>
+              )}
               <div className="flex items-center justify-between ml-0">
                 <p className="text-xs text-muted-foreground">250 calls/month free tier</p>
                 <div className="flex items-center gap-2">
@@ -563,11 +666,22 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
               </div>
             </div>
             <div className="space-y-2">
-              <ToggleField
-                label="AlphaVantage"
-                checked={localSettings.useAlphaVantage ?? false}
-                onChange={(v) => handleChange('useAlphaVantage', v)}
-              />
+              <div className="flex items-center justify-between">
+                <ToggleField
+                  label="AlphaVantage"
+                  checked={localSettings.useAlphaVantage ?? false}
+                  onChange={(v) => handleChange('useAlphaVantage', v)}
+                  disabled={apiLockouts.alphavantage.locked}
+                />
+                {apiLockouts.alphavantage.locked && (
+                  <span className="text-xs font-semibold text-red-400">
+                    🔒 Locked ({getTimeUntilUnlock(apiLockouts.alphavantage.unlockAt)})
+                  </span>
+                )}
+              </div>
+              {apiLockouts.alphavantage.locked && (
+                <p className="text-xs text-red-400 ml-0">Rate limited - Available in {getTimeUntilUnlock(apiLockouts.alphavantage.unlockAt)}</p>
+              )}
               <div className="flex items-center justify-between ml-0">
                 <p className="text-xs text-muted-foreground">5 calls/minute, 500/day free</p>
                 <div className="flex items-center gap-2">
@@ -577,11 +691,22 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
               </div>
             </div>
             <div className="space-y-2">
-              <ToggleField
-                label="Massive.com (Polygon.io)"
-                checked={localSettings.useMassive ?? false}
-                onChange={(v) => handleChange('useMassive', v)}
-              />
+              <div className="flex items-center justify-between">
+                <ToggleField
+                  label="Massive.com (Polygon.io)"
+                  checked={localSettings.useMassive ?? false}
+                  onChange={(v) => handleChange('useMassive', v)}
+                  disabled={apiLockouts.massive.locked}
+                />
+                {apiLockouts.massive.locked && (
+                  <span className="text-xs font-semibold text-red-400">
+                    🔒 Locked ({getTimeUntilUnlock(apiLockouts.massive.unlockAt)})
+                  </span>
+                )}
+              </div>
+              {apiLockouts.massive.locked && (
+                <p className="text-xs text-red-400 ml-0">Rate limited - Available in {getTimeUntilUnlock(apiLockouts.massive.unlockAt)}</p>
+              )}
               <div className="flex items-center justify-between ml-0">
                 <p className="text-xs text-muted-foreground">5 calls/minute rate limit</p>
                 <div className="flex items-center gap-2">

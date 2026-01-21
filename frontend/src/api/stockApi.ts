@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { ScannerSettings, ScanResult, Stock } from '../types'
 import { scanStocks as renderScanStocks, getStockQuote, markScanComplete, canScanNow, getTimeUntilNextScan } from './renderBackend'
+import { lockApi } from '../components/SettingsPanel'
 
 // Use Render backend (bypasses Yahoo rate limits via different IP)
 const USE_RENDER_BACKEND = true
