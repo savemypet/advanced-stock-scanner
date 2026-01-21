@@ -19,14 +19,14 @@ Your Advanced Stock Scanner now has **3-layer API fallback** with AlphaVantage a
 ## 🎯 Why AlphaVantage?
 
 ### **Benefits:**
-- ✅ **FREE tier**: 500 API calls per day
+- ✅ **FREE tier**: 25 API calls per day
 - ✅ **Real-time data**: Accurate stock quotes
 - ✅ **No credit card**: Completely free
 - ✅ **Simple setup**: Just need an API key
 - ✅ **Third safety net**: When Yahoo & SerpAPI both fail
 
 ### **Limitations:**
-- ⚠️ 500 calls/day limit (resets daily)
+- ⚠️ 25 calls/day limit (resets daily)
 - ⚠️ No company name in basic quotes
 - ⚠️ No float/shares outstanding data
 - ⚠️ Limited intraday data in free tier
@@ -187,14 +187,14 @@ Wait for Yahoo unlock (2 hours)
 |-----|-------|-------|------|
 | **Yahoo Finance** | ~60/min | Continuous | FREE |
 | **SerpAPI** | 250/month | Monthly (1st) | FREE |
-| **AlphaVantage** | 500/day | Daily (midnight) | FREE |
+| **AlphaVantage** | 25/day | Daily (midnight) | FREE |
 
 **Total FREE calls per day:**
 - Yahoo: ~86,400 calls (60/min × 1440 min)
 - SerpAPI: ~8 calls/day (250/30 days)
-- AlphaVantage: 500 calls/day
+- AlphaVantage: 25 calls/day
 
-**= 86,908 FREE API calls per day!** 🎉
+**= 86,433 FREE API calls per day!** 🎉
 
 ---
 

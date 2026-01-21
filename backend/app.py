@@ -34,9 +34,9 @@ SERPAPI_BASE_URL = 'https://serpapi.com/search'
 SERPAPI_FREE_LIMIT = 250  # Monthly free tier limit
 
 # AlphaVantage Configuration (Third fallback when SerpAPI exhausted)
-ALPHAVANTAGE_KEY = 'YOUR_ALPHAVANTAGE_API_KEY'  # Get free key from: https://www.alphavantage.co/support/#api-key
+ALPHAVANTAGE_KEY = 'ED8M1QO531HEYLOS'  # AlphaVantage API key configured ✅
 ALPHAVANTAGE_BASE_URL = 'https://www.alphavantage.co/query'
-ALPHAVANTAGE_FREE_LIMIT = 500  # Daily free tier limit (25 calls/day standard, 500 with free key)
+ALPHAVANTAGE_FREE_LIMIT = 25  # Daily free tier limit (25 API calls per day)
 
 # Smart API switching - automatically rotates between Yahoo, SerpAPI, and AlphaVantage
 use_yahoo_locked = False  # Yahoo Finance locked status
