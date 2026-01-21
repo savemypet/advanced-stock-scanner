@@ -15,17 +15,61 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
   const [isLiveMode, setIsLiveMode] = useState(true)
   const [isLoading, setIsLoading] = useState(true)
 
-  // Fetch today's discovered stocks from backend for AI learning
+  // Fetch today's discovered stocks from backend with REAL charts and pattern labels
   useEffect(() => {
     const fetchDailyStocks = async () => {
       try {
-        console.log(`🤖 Fetching today's discovered stocks for AI learning...`)
+        console.log(`🤖 Fetching today's discovered stocks with real charts...`)
         const response = await fetch('http://localhost:5000/api/daily-discovered')
         const data = await response.json()
         
         if (data.success && data.stocks.length > 0) {
-          console.log(`✅ Demo learning from ${data.count} real stocks found today:`, data.stocks.map((s: any) => s.symbol).join(', '))
-          setSimulatedStocks(data.stocks)
+          console.log(`✅ Found ${data.count} real stocks with charts:`, data.stocks.map((s: any) => s.symbol).join(', '))
+          
+          // Enhance stocks with pattern detection if not already present
+          const enhancedStocks = await Promise.all(
+            data.stocks.map(async (stock: any) => {
+              // If stock has chart data, detect patterns
+              if (stock.chartData && stock.chartData['5m']) {
+                const candles = stock.chartData['5m']
+                const patterns = detectPatterns(candles)
+                const latestPattern = patterns.length > 0 ? patterns[patterns.length - 1] : null
+                
+                if (latestPattern) {
+                  stock.detectedPattern = latestPattern
+                  console.log(`🧠 Pattern detected for ${stock.symbol}: ${latestPattern.name} (${latestPattern.signal})`)
+                }
+              } else {
+                // Fetch real chart data if missing
+                try {
+                  console.log(`📊 Fetching real chart data for ${stock.symbol}...`)
+                  const chartResponse = await fetch(`http://localhost:5000/api/quote/${stock.symbol}?timeframe=5m`)
+                  const chartData = await chartResponse.json()
+                  
+                  if (chartData.success && chartData.stock) {
+                    stock.chartData = chartData.stock.chartData || { '5m': chartData.stock.candles || [] }
+                    stock.candles = chartData.stock.candles || []
+                    
+                    // Detect patterns on real data
+                    if (stock.chartData['5m'] && stock.chartData['5m'].length > 0) {
+                      const patterns = detectPatterns(stock.chartData['5m'])
+                      const latestPattern = patterns.length > 0 ? patterns[patterns.length - 1] : null
+                      if (latestPattern) {
+                        stock.detectedPattern = latestPattern
+                        console.log(`🧠 Pattern detected for ${stock.symbol}: ${latestPattern.name}`)
+                      }
+                    }
+                  }
+                } catch (err) {
+                  console.warn(`⚠️ Could not fetch chart data for ${stock.symbol}:`, err)
+                }
+              }
+              
+              return stock
+            })
+          )
+          
+          setSimulatedStocks(enhancedStocks)
         } else {
           // No stocks discovered yet - use live stocks if available, or generate demo
           if (liveStocks && liveStocks.length > 0) {
@@ -66,17 +110,41 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
   }, [liveStocks])
 
   // Real-time updates - update every 3 seconds for visible demo movement
+  // NOTE: For real stocks found today, we keep their real chart data and patterns
   useEffect(() => {
     if (!isLiveMode) return
 
     const interval = setInterval(() => {
-      setSimulatedStocks(prevStocks => updateLiveStocks(prevStocks))
+      setSimulatedStocks(prevStocks => {
+        // Only update stocks that don't have real chart data (demo stocks)
+        // Real stocks from today keep their real charts
+        return prevStocks.map(stock => {
+          // If stock has real chart data from today, don't simulate updates
+          // Just keep the real data and patterns
+          if (stock.chartData && stock.chartData['5m'] && stock.chartData['5m'].length > 10) {
+            // This is a real stock - keep it as is, just update price slightly for demo
+            return {
+              ...stock,
+              // Small price movement for demo effect, but keep real chart data
+              currentPrice: stock.currentPrice * (1 + (Math.random() - 0.5) * 0.001),
+            }
+          }
+          // Demo stock - full simulation
+          return updateSingleStock(stock)
+        })
+      })
       
       // Update selected stock if modal is open
       setSelectedStock(prevSelected => {
         if (!prevSelected) return null
-        const updatedStock = updateSingleStock(prevSelected)
-        return updatedStock
+        // Keep real chart data for real stocks
+        if (prevSelected.chartData && prevSelected.chartData['5m'] && prevSelected.chartData['5m'].length > 10) {
+          return {
+            ...prevSelected,
+            currentPrice: prevSelected.currentPrice * (1 + (Math.random() - 0.5) * 0.001),
+          }
+        }
+        return updateSingleStock(prevSelected)
       })
     }, 3000) // Update every 3 seconds - reasonable speed to watch
 
@@ -751,7 +819,7 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
             </h2>
             <p className="text-sm text-muted-foreground mt-1">
               {isLoading ? (
-                '⏳ Loading today\'s discovered stocks for AI learning...'
+                '⏳ Loading today\'s discovered stocks with real charts and patterns...'
               ) : simulatedStocks.length > 0 && simulatedStocks[0].symbol && !simulatedStocks[0].symbol.startsWith('DEMO-') ? (
                 `🤖 AI Learning from ${simulatedStocks.length} real stocks found today - watch candlestick patterns in action!`
               ) : liveStocks && liveStocks.length > 0 ? (

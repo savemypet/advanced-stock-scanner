@@ -1060,12 +1060,26 @@ def scan_stocks():
                 daily_discovered_stocks = []
                 daily_discovered_date = today
             
-            # Add newly discovered stocks to today's list
+            # Add newly discovered stocks to today's list with FULL chart data
             for stock in results:
                 # Check if stock already in today's list
                 if not any(s['symbol'] == stock['symbol'] for s in daily_discovered_stocks):
+                    # Ensure stock has full chart data for all timeframes
+                    if 'chartData' not in stock or not stock['chartData']:
+                        # Fetch real chart data for all timeframes
+                        try:
+                            logging.info(f"📊 Fetching full chart data for {stock['symbol']}...")
+                            full_stock_data = scanner.get_stock_data(stock['symbol'], '5m')
+                            if full_stock_data and 'chartData' in full_stock_data:
+                                stock['chartData'] = full_stock_data['chartData']
+                                stock['candles'] = full_stock_data.get('candles', [])
+                                logging.info(f"✅ Added full chart data for {stock['symbol']}")
+                        except Exception as e:
+                            logging.warning(f"⚠️ Could not fetch full chart data for {stock['symbol']}: {str(e)}")
+                    
+                    # Store the stock with full data
                     daily_discovered_stocks.append(stock)
-                    logging.info(f"📊 Added {stock['symbol']} to today's discovered stocks (total: {len(daily_discovered_stocks)})")
+                    logging.info(f"📊 Added {stock['symbol']} to today's discovered stocks with real charts (total: {len(daily_discovered_stocks)})")
         
         # Include smart API switching status
         yahoo_available = should_use_yahoo()
