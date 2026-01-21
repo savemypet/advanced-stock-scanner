@@ -127,30 +127,31 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
   const [marketStatus, setMarketStatus] = useState(isMarketOpen())
   const [apiLockouts, setApiLockouts] = useState(getApiLockoutStatus())
   
-  // Update market status every minute
+  // Update market status and API lockouts every second for countdown
   useEffect(() => {
     const interval = setInterval(() => {
       setMarketStatus(isMarketOpen())
-      setApiLockouts(getApiLockoutStatus()) // Also update lockout status
-    }, 60000) // Check every minute
+      setApiLockouts(getApiLockoutStatus()) // Update lockout status every second for countdown
+    }, 1000) // Update every second for smooth countdown
     
     return () => clearInterval(interval)
   }, [])
   
-  // Format time remaining until unlock
+  // Format time remaining until unlock (with seconds for countdown)
   const getTimeUntilUnlock = (unlockAt: number | null): string => {
     if (!unlockAt) return ''
     const now = Date.now()
     const remaining = unlockAt - now
-    if (remaining <= 0) return ''
+    if (remaining <= 0) return '0:00:00'
     
     const hours = Math.floor(remaining / (60 * 60 * 1000))
     const minutes = Math.floor((remaining % (60 * 60 * 1000)) / (60 * 1000))
+    const seconds = Math.floor((remaining % (60 * 1000)) / 1000)
     
     if (hours > 0) {
-      return `${hours}h ${minutes}m`
+      return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
     }
-    return `${minutes}m`
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`
   }
   
   // Auto-update settings when API selection changes
@@ -616,103 +617,127 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
             })()}
             
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <ToggleField
-                  label="Yahoo Finance (Recommended)"
-                  checked={localSettings.useYahoo ?? true}
-                  onChange={(v) => handleChange('useYahoo', v)}
-                  disabled={apiLockouts.yahoo.locked}
-                />
-                {apiLockouts.yahoo.locked && (
-                  <span className="text-xs font-semibold text-red-400">
-                    🔒 Locked ({getTimeUntilUnlock(apiLockouts.yahoo.unlockAt)})
-                  </span>
-                )}
-              </div>
-              {apiLockouts.yahoo.locked && (
-                <p className="text-xs text-red-400 ml-0">Rate limited - Available in {getTimeUntilUnlock(apiLockouts.yahoo.unlockAt)}</p>
-              )}
-              <div className="flex items-center justify-between ml-0">
-                <p className="text-xs text-muted-foreground">Fast, reliable, high quota</p>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-blue-400">📊 10 stocks</span>
-                  <span className="text-xs font-semibold text-green-400">⏱️ 20s</span>
+              <div className={`flex items-center justify-between p-2 rounded-lg ${apiLockouts.yahoo.locked ? 'bg-red-500/5 border border-red-500/20 opacity-60' : ''}`}>
+                <div className="flex items-center gap-2 flex-1">
+                  <ToggleField
+                    label="Yahoo Finance (Recommended)"
+                    checked={localSettings.useYahoo ?? true}
+                    onChange={(v) => handleChange('useYahoo', v)}
+                    disabled={apiLockouts.yahoo.locked}
+                  />
+                  {apiLockouts.yahoo.locked && (
+                    <div className="flex items-center gap-1">
+                      <span className="text-xs font-bold text-red-400">🔒</span>
+                      <span className="text-xs font-mono font-semibold text-red-400">
+                        {getTimeUntilUnlock(apiLockouts.yahoo.unlockAt)}
+                      </span>
+                    </div>
+                  )}
                 </div>
+              </div>
+              <div className="flex items-center justify-between ml-0">
+                <p className={`text-xs ${apiLockouts.yahoo.locked ? 'text-muted-foreground/50' : 'text-muted-foreground'}`}>
+                  {apiLockouts.yahoo.locked ? 'Rate limited - Locked for 24 hours' : 'Fast, reliable, high quota'}
+                </p>
+                {!apiLockouts.yahoo.locked && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-blue-400">📊 10 stocks</span>
+                    <span className="text-xs font-semibold text-green-400">⏱️ 20s</span>
+                  </div>
+                )}
               </div>
             </div>
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <ToggleField
-                  label="SerpAPI"
-                  checked={localSettings.useSerpAPI ?? false}
-                  onChange={(v) => handleChange('useSerpAPI', v)}
-                  disabled={apiLockouts.serpapi.locked}
-                />
-                {apiLockouts.serpapi.locked && (
-                  <span className="text-xs font-semibold text-red-400">
-                    🔒 Locked ({getTimeUntilUnlock(apiLockouts.serpapi.unlockAt)})
-                  </span>
-                )}
-              </div>
-              {apiLockouts.serpapi.locked && (
-                <p className="text-xs text-red-400 ml-0">Rate limited - Available in {getTimeUntilUnlock(apiLockouts.serpapi.unlockAt)}</p>
-              )}
-              <div className="flex items-center justify-between ml-0">
-                <p className="text-xs text-muted-foreground">250 calls/month free tier</p>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-blue-400">📊 5-10 stocks</span>
-                  <span className="text-xs font-semibold text-yellow-400">⏱️ 120s</span>
+              <div className={`flex items-center justify-between p-2 rounded-lg ${apiLockouts.serpapi.locked ? 'bg-red-500/5 border border-red-500/20 opacity-60' : ''}`}>
+                <div className="flex items-center gap-2 flex-1">
+                  <ToggleField
+                    label="SerpAPI"
+                    checked={localSettings.useSerpAPI ?? false}
+                    onChange={(v) => handleChange('useSerpAPI', v)}
+                    disabled={apiLockouts.serpapi.locked}
+                  />
+                  {apiLockouts.serpapi.locked && (
+                    <div className="flex items-center gap-1">
+                      <span className="text-xs font-bold text-red-400">🔒</span>
+                      <span className="text-xs font-mono font-semibold text-red-400">
+                        {getTimeUntilUnlock(apiLockouts.serpapi.unlockAt)}
+                      </span>
+                    </div>
+                  )}
                 </div>
+              </div>
+              <div className="flex items-center justify-between ml-0">
+                <p className={`text-xs ${apiLockouts.serpapi.locked ? 'text-muted-foreground/50' : 'text-muted-foreground'}`}>
+                  {apiLockouts.serpapi.locked ? 'Rate limited - Locked for 24 hours' : '250 calls/month free tier'}
+                </p>
+                {!apiLockouts.serpapi.locked && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-blue-400">📊 5-10 stocks</span>
+                    <span className="text-xs font-semibold text-yellow-400">⏱️ 120s</span>
+                  </div>
+                )}
               </div>
             </div>
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <ToggleField
-                  label="AlphaVantage"
-                  checked={localSettings.useAlphaVantage ?? false}
-                  onChange={(v) => handleChange('useAlphaVantage', v)}
-                  disabled={apiLockouts.alphavantage.locked}
-                />
-                {apiLockouts.alphavantage.locked && (
-                  <span className="text-xs font-semibold text-red-400">
-                    🔒 Locked ({getTimeUntilUnlock(apiLockouts.alphavantage.unlockAt)})
-                  </span>
-                )}
-              </div>
-              {apiLockouts.alphavantage.locked && (
-                <p className="text-xs text-red-400 ml-0">Rate limited - Available in {getTimeUntilUnlock(apiLockouts.alphavantage.unlockAt)}</p>
-              )}
-              <div className="flex items-center justify-between ml-0">
-                <p className="text-xs text-muted-foreground">5 calls/minute, 500/day free</p>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-blue-400">📊 5 stocks max</span>
-                  <span className="text-xs font-semibold text-orange-400">⏱️ 60s</span>
+              <div className={`flex items-center justify-between p-2 rounded-lg ${apiLockouts.alphavantage.locked ? 'bg-red-500/5 border border-red-500/20 opacity-60' : ''}`}>
+                <div className="flex items-center gap-2 flex-1">
+                  <ToggleField
+                    label="AlphaVantage"
+                    checked={localSettings.useAlphaVantage ?? false}
+                    onChange={(v) => handleChange('useAlphaVantage', v)}
+                    disabled={apiLockouts.alphavantage.locked}
+                  />
+                  {apiLockouts.alphavantage.locked && (
+                    <div className="flex items-center gap-1">
+                      <span className="text-xs font-bold text-red-400">🔒</span>
+                      <span className="text-xs font-mono font-semibold text-red-400">
+                        {getTimeUntilUnlock(apiLockouts.alphavantage.unlockAt)}
+                      </span>
+                    </div>
+                  )}
                 </div>
+              </div>
+              <div className="flex items-center justify-between ml-0">
+                <p className={`text-xs ${apiLockouts.alphavantage.locked ? 'text-muted-foreground/50' : 'text-muted-foreground'}`}>
+                  {apiLockouts.alphavantage.locked ? 'Rate limited - Locked for 24 hours' : '5 calls/minute, 500/day free'}
+                </p>
+                {!apiLockouts.alphavantage.locked && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-blue-400">📊 5 stocks max</span>
+                    <span className="text-xs font-semibold text-orange-400">⏱️ 60s</span>
+                  </div>
+                )}
               </div>
             </div>
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <ToggleField
-                  label="Massive.com (Polygon.io)"
-                  checked={localSettings.useMassive ?? false}
-                  onChange={(v) => handleChange('useMassive', v)}
-                  disabled={apiLockouts.massive.locked}
-                />
-                {apiLockouts.massive.locked && (
-                  <span className="text-xs font-semibold text-red-400">
-                    🔒 Locked ({getTimeUntilUnlock(apiLockouts.massive.unlockAt)})
-                  </span>
-                )}
-              </div>
-              {apiLockouts.massive.locked && (
-                <p className="text-xs text-red-400 ml-0">Rate limited - Available in {getTimeUntilUnlock(apiLockouts.massive.unlockAt)}</p>
-              )}
-              <div className="flex items-center justify-between ml-0">
-                <p className="text-xs text-muted-foreground">5 calls/minute rate limit</p>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-blue-400">📊 5 stocks max</span>
-                  <span className="text-xs font-semibold text-orange-400">⏱️ 60s</span>
+              <div className={`flex items-center justify-between p-2 rounded-lg ${apiLockouts.massive.locked ? 'bg-red-500/5 border border-red-500/20 opacity-60' : ''}`}>
+                <div className="flex items-center gap-2 flex-1">
+                  <ToggleField
+                    label="Massive.com (Polygon.io)"
+                    checked={localSettings.useMassive ?? false}
+                    onChange={(v) => handleChange('useMassive', v)}
+                    disabled={apiLockouts.massive.locked}
+                  />
+                  {apiLockouts.massive.locked && (
+                    <div className="flex items-center gap-1">
+                      <span className="text-xs font-bold text-red-400">🔒</span>
+                      <span className="text-xs font-mono font-semibold text-red-400">
+                        {getTimeUntilUnlock(apiLockouts.massive.unlockAt)}
+                      </span>
+                    </div>
+                  )}
                 </div>
+              </div>
+              <div className="flex items-center justify-between ml-0">
+                <p className={`text-xs ${apiLockouts.massive.locked ? 'text-muted-foreground/50' : 'text-muted-foreground'}`}>
+                  {apiLockouts.massive.locked ? 'Rate limited - Locked for 24 hours' : '5 calls/minute rate limit'}
+                </p>
+                {!apiLockouts.massive.locked && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-blue-400">📊 5 stocks max</span>
+                    <span className="text-xs font-semibold text-orange-400">⏱️ 60s</span>
+                  </div>
+                )}
               </div>
             </div>
             {(!localSettings.useYahoo && !localSettings.useSerpAPI && !localSettings.useAlphaVantage && !localSettings.useMassive) && (
@@ -828,8 +853,8 @@ interface ToggleFieldProps {
 
 function ToggleField({ label, checked, onChange, disabled }: ToggleFieldProps) {
   return (
-    <label className="flex items-center justify-between cursor-pointer">
-      <span className={`text-sm ${disabled ? 'text-muted-foreground' : ''}`}>{label}</span>
+    <label className={`flex items-center justify-between ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
+      <span className={`text-sm ${disabled ? 'text-muted-foreground/50' : ''}`}>{label}</span>
       <button
         type="button"
         role="switch"
@@ -839,13 +864,14 @@ function ToggleField({ label, checked, onChange, disabled }: ToggleFieldProps) {
         className={`
           relative inline-flex h-6 w-11 items-center rounded-full transition-colors
           ${checked ? 'bg-primary' : 'bg-muted'}
-          ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
+          ${disabled ? 'opacity-30 cursor-not-allowed grayscale' : ''}
         `}
       >
         <span
           className={`
             inline-block h-4 w-4 transform rounded-full bg-white transition-transform
             ${checked ? 'translate-x-6' : 'translate-x-1'}
+            ${disabled ? 'opacity-50' : ''}
           `}
         />
       </button>
