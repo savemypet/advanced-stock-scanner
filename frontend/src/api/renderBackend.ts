@@ -13,7 +13,9 @@
  * - Minimum 20 seconds between scans (recommended)
  */
 
-const RENDER_BACKEND_URL = 'https://savemypet-backend.onrender.com/api/trpc';
+const RENDER_BACKEND_URL = 'https://savemypet-backend.onrender.com';
+const RENDER_BACKEND_TRPC = 'https://savemypet-backend.onrender.com/api/trpc';
+const RENDER_BACKEND_REST = 'https://savemypet-backend.onrender.com/api/stocks';
 
 export interface StockData {
   symbol: string;
@@ -65,7 +67,7 @@ export async function scanStocks(criteria: ScanCriteria): Promise<ScanResult> {
     criteria.symbols = criteria.symbols.slice(0, 10);
   }
 
-  // Using query (GET request with query parameters)
+  // Use simple REST endpoint (more reliable than tRPC)
   const input = {
     symbols: criteria.symbols,
     minPrice: criteria.minPrice ?? 1,
@@ -77,10 +79,13 @@ export async function scanStocks(criteria: ScanCriteria): Promise<ScanResult> {
 
   console.log(`📡 Scanning ${criteria.symbols.length} stocks via Render backend...`);
 
-  // Query uses GET with input as query parameter
-  const url = `${RENDER_BACKEND_URL}/stocks.scan?input=${encodeURIComponent(JSON.stringify(input))}`;
-  const response = await fetch(url, {
-    method: 'GET',
+  // Simple REST POST endpoint
+  const response = await fetch(`${RENDER_BACKEND_REST}/scan`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
   });
   if (!response.ok) {
     throw new Error(`Render backend error: ${response.status}`);
@@ -98,14 +103,11 @@ export async function getStockQuote(
   symbol: string,
   timeframe: '1m' | '5m' | '1h' | '24h' = '5m'
 ): Promise<StockData> {
-  // Using query (GET request with query parameters)
-  const input = { symbol, timeframe };
-
+  // Use simple REST endpoint (more reliable than tRPC)
   console.log(`📊 Fetching ${symbol} (${timeframe}) via Render backend...`);
 
-  // Query uses GET with input as query parameter
-  const url = `${RENDER_BACKEND_URL}/stocks.getQuote?input=${encodeURIComponent(JSON.stringify(input))}`;
-  const response = await fetch(url, {
+  // Simple REST GET endpoint
+  const response = await fetch(`${RENDER_BACKEND_REST}/quote/${symbol}?timeframe=${timeframe}`, {
     method: 'GET',
   });
   if (!response.ok) {
@@ -113,7 +115,8 @@ export async function getStockQuote(
   }
 
   const data = await response.json();
-  return data.result.data.stock;
+  // REST endpoint returns stock directly
+  return data.stock;
 }
 
 /**
@@ -134,16 +137,18 @@ export async function sendStockAlert(
 
   console.log(`📲 Sending push notification for ${stocks.length} stocks...`);
 
-  const response = await fetch(url, {
+  const response = await fetch(`${RENDER_BACKEND_TRPC}/stocks.notify`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      userId,
-      stocks,
-      title,
-      message,
+      input: {
+        userId,
+        stocks,
+        title,
+        message,
+      },
     }),
   });
 
@@ -167,7 +172,7 @@ export async function checkBackendHealth(): Promise<{
     cacheTime: number;
   };
 }> {
-  const url = `${RENDER_BACKEND_URL}/stocks.health`;
+  const url = `${RENDER_BACKEND_TRPC}/stocks.health`;
 
   const response = await fetch(url);
   if (!response.ok) {
@@ -175,7 +180,7 @@ export async function checkBackendHealth(): Promise<{
   }
 
   const data = await response.json();
-  return data.result.data;
+  return data.result.data.json;
 }
 
 /**
