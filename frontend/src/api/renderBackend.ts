@@ -65,20 +65,27 @@ export async function scanStocks(criteria: ScanCriteria): Promise<ScanResult> {
     criteria.symbols = criteria.symbols.slice(0, 10);
   }
 
-  const url = `${RENDER_BACKEND_URL}/stocks.scan?input=${encodeURIComponent(
-    JSON.stringify({
-      symbols: criteria.symbols,
-      minPrice: criteria.minPrice ?? 1,
-      maxPrice: criteria.maxPrice ?? 200,
-      maxFloat: criteria.maxFloat ?? 500000000,
-      minGainPercent: criteria.minGainPercent ?? 2,
-      volumeMultiplier: criteria.volumeMultiplier ?? 1.5,
-    })
-  )}`;
+  // tRPC with @hono/trpc-server works better with POST for queries with input
+  const url = `${RENDER_BACKEND_URL}/stocks.scan`;
+  const input = {
+    symbols: criteria.symbols,
+    minPrice: criteria.minPrice ?? 1,
+    maxPrice: criteria.maxPrice ?? 200,
+    maxFloat: criteria.maxFloat ?? 500000000,
+    minGainPercent: criteria.minGainPercent ?? 2,
+    volumeMultiplier: criteria.volumeMultiplier ?? 1.5,
+  };
 
   console.log(`📡 Scanning ${criteria.symbols.length} stocks via Render backend...`);
 
-  const response = await fetch(url);
+  // Try POST first (recommended for tRPC with input)
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ input }),
+  });
   if (!response.ok) {
     throw new Error(`Render backend error: ${response.status}`);
   }
@@ -95,13 +102,20 @@ export async function getStockQuote(
   symbol: string,
   timeframe: '1m' | '5m' | '1h' | '24h' = '5m'
 ): Promise<StockData> {
-  const url = `${RENDER_BACKEND_URL}/stocks.getQuote?input=${encodeURIComponent(
-    JSON.stringify({ symbol, timeframe })
-  )}`;
+  // tRPC with @hono/trpc-server works better with POST for queries with input
+  const url = `${RENDER_BACKEND_URL}/stocks.getQuote`;
+  const input = { symbol, timeframe };
 
   console.log(`📊 Fetching ${symbol} (${timeframe}) via Render backend...`);
 
-  const response = await fetch(url);
+  // Try POST first (recommended for tRPC with input)
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ input }),
+  });
   if (!response.ok) {
     throw new Error(`Render backend error: ${response.status}`);
   }
