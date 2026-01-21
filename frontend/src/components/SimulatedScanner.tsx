@@ -45,28 +45,74 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
                   console.log(`🧠 Pattern detected for ${stock.symbol}: ${latestPattern.name} (${latestPattern.signal})`)
                 }
               } else {
-                // Fetch real chart data if missing
+                // Fetch real 24-hour chart data for AI to study
                 try {
-                  console.log(`📊 Fetching real chart data for ${stock.symbol}...`)
-                  const chartResponse = await fetch(`http://localhost:5000/api/quote/${stock.symbol}?timeframe=5m`)
-                  const chartData = await chartResponse.json()
+                  console.log(`📊 Fetching real 24-hour data for ${stock.symbol} (AI study)...`)
+                  // Fetch 24h data for full day analysis
+                  const chartResponse24h = await fetch(`http://localhost:5000/api/stock/${stock.symbol}?timeframe=24h`)
+                  const chartData24h = await chartResponse24h.json()
                   
-                  if (chartData.success && chartData.stock) {
-                    stock.chartData = chartData.stock.chartData || { '5m': chartData.stock.candles || [] }
-                    stock.candles = chartData.stock.candles || []
+                  // Also fetch 5m for detailed view
+                  const chartResponse5m = await fetch(`http://localhost:5000/api/stock/${stock.symbol}?timeframe=5m`)
+                  const chartData5m = await chartResponse5m.json()
+                  
+                  if (chartData24h.success && chartData24h.stock) {
+                    // Use 24h data as primary for AI study
+                    stock.chartData = {
+                      '24h': chartData24h.stock.candles || [],
+                      '5m': chartData5m.success && chartData5m.stock ? (chartData5m.stock.candles || []) : []
+                    }
+                    stock.candles = chartData24h.stock.candles || []
                     
-                    // Detect patterns on real data
+                    // Detect patterns on real 24h data
+                    if (stock.chartData['24h'] && stock.chartData['24h'].length > 0) {
+                      const patterns = detectPatterns(stock.chartData['24h'])
+                      const latestPattern = patterns.length > 0 ? patterns[patterns.length - 1] : null
+                      if (latestPattern) {
+                        stock.detectedPattern = latestPattern
+                        console.log(`🧠 Pattern detected on 24h data for ${stock.symbol}: ${latestPattern.name} (${latestPattern.signal})`)
+                      }
+                      console.log(`✅ Loaded ${stock.chartData['24h'].length} candles of real 24h data for ${stock.symbol}`)
+                    }
+                  } else if (chartData5m.success && chartData5m.stock) {
+                    // Fallback to 5m data
+                    stock.chartData = { '5m': chartData5m.stock.candles || [] }
+                    stock.candles = chartData5m.stock.candles || []
+                    
                     if (stock.chartData['5m'] && stock.chartData['5m'].length > 0) {
                       const patterns = detectPatterns(stock.chartData['5m'])
                       const latestPattern = patterns.length > 0 ? patterns[patterns.length - 1] : null
                       if (latestPattern) {
                         stock.detectedPattern = latestPattern
-                        console.log(`🧠 Pattern detected for ${stock.symbol}: ${latestPattern.name}`)
+                        console.log(`🧠 Pattern detected on 5m data for ${stock.symbol}: ${latestPattern.name}`)
                       }
                     }
                   }
                 } catch (err) {
-                  console.warn(`⚠️ Could not fetch chart data for ${stock.symbol}:`, err)
+                  console.warn(`⚠️ Could not fetch 24h chart data for ${stock.symbol}:`, err)
+                }
+              }
+              
+              // Ensure we have 24h data for AI study
+              if (stock.chartData && !stock.chartData['24h']) {
+                try {
+                  console.log(`📊 Fetching missing 24h data for ${stock.symbol}...`)
+                  const chartResponse24h = await fetch(`http://localhost:5000/api/stock/${stock.symbol}?timeframe=24h`)
+                  const chartData24h = await chartResponse24h.json()
+                  
+                  if (chartData24h.success && chartData24h.stock && chartData24h.stock.candles) {
+                    stock.chartData['24h'] = chartData24h.stock.candles
+                    console.log(`✅ Added ${chartData24h.stock.candles.length} candles of 24h data for ${stock.symbol}`)
+                    
+                    // Re-detect patterns with 24h data
+                    const patterns = detectPatterns(chartData24h.stock.candles)
+                    const latestPattern = patterns.length > 0 ? patterns[patterns.length - 1] : null
+                    if (latestPattern) {
+                      stock.detectedPattern = latestPattern
+                    }
+                  }
+                } catch (err) {
+                  console.warn(`⚠️ Could not fetch 24h data for ${stock.symbol}:`, err)
                 }
               }
               
@@ -964,8 +1010,13 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
               </div>
             ))}
           </div>
-          <div className="mt-3 text-xs text-muted-foreground">
-            💡 Click any ticker to view detailed charts and pattern analysis
+          <div className="mt-3 flex items-center justify-between">
+            <div className="text-xs text-muted-foreground">
+              💡 Click any ticker to view detailed charts and pattern analysis
+            </div>
+            <div className="text-xs text-blue-300 font-medium">
+              📊 Real 24h data for AI study
+            </div>
           </div>
         </div>
       )}
