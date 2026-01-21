@@ -72,6 +72,32 @@ export default function CandlestickOnlyChart({ candles, height = 400, onPatternD
     }
   }, [candles])
   
+  // Detect all buy/sell signals from patterns
+  const buySellSignals = useMemo(() => {
+    if (!candles || candles.length === 0) return []
+    
+    const patterns = detectPatterns(candles)
+    const signals: Array<{ index: number; signal: 'BUY' | 'SELL'; price: number; pattern: string; confidence: string }> = []
+    
+    patterns.forEach(pattern => {
+      if (pattern.confidence === 'HIGH' || pattern.confidence === 'MEDIUM') {
+        const candleIndex = pattern.candleIndex
+        if (candleIndex < candles.length) {
+          const candle = candles[candleIndex]
+          signals.push({
+            index: candleIndex,
+            signal: pattern.signal,
+            price: pattern.signal === 'BUY' ? candle.low : candle.high, // Buy at low, sell at high
+            pattern: pattern.pattern,
+            confidence: pattern.confidence,
+          })
+        }
+      }
+    })
+    
+    return signals
+  }, [candles])
+
   const chartData = useMemo(() => {
     if (!candles || candles.length === 0) {
       return []
@@ -95,6 +121,9 @@ export default function CandlestickOnlyChart({ candles, height = 400, onPatternD
       const upperWick = candle.high - bodyHigh
       const lowerWick = bodyLow - candle.low
       
+      // Check if this candle has a buy/sell signal
+      const signal = buySellSignals.find(s => s.index === index)
+      
       return {
         time: date.toLocaleTimeString('en-US', { 
           hour: '2-digit', 
@@ -115,9 +144,13 @@ export default function CandlestickOnlyChart({ candles, height = 400, onPatternD
         bodyHeight: Math.max(bodyHigh - bodyLow, 0.01), // Ensure minimum visible height
         upperWick,
         lowerWick,
+        signal: signal?.signal, // 'BUY' or 'SELL'
+        signalPrice: signal?.price,
+        signalPattern: signal?.pattern,
+        signalConfidence: signal?.confidence,
       }
     })
-  }, [candles, onPatternDetected])
+  }, [candles, onPatternDetected, buySellSignals])
 
   const priceData = useMemo(() => {
     if (!chartData || chartData.length === 0) {
@@ -146,7 +179,22 @@ export default function CandlestickOnlyChart({ candles, height = 400, onPatternD
               <span className={`text-sm font-bold ${data.isGreen ? 'text-green-500' : 'text-red-500'}`}>
                 {data.isGreen ? '▲' : '▼'} {changePercent}%
               </span>
+              {/* Show buy/sell signal in tooltip */}
+              {data.signal && (
+                <span className={`text-xs font-bold px-2 py-0.5 rounded ${
+                  data.signal === 'BUY' 
+                    ? 'bg-green-500/20 text-green-400 border border-green-500/30' 
+                    : 'bg-red-500/20 text-red-400 border border-red-500/30'
+                }`}>
+                  {data.signal} {data.signalConfidence}
+                </span>
+              )}
             </div>
+            {data.signalPattern && (
+              <div className="text-xs text-yellow-400 font-medium">
+                🧠 Pattern: {data.signalPattern.replace(/_/g, ' ')}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
               <span className="text-gray-400">O:</span>
               <span className="text-white font-medium">${data.open.toFixed(2)}</span>
@@ -156,6 +204,14 @@ export default function CandlestickOnlyChart({ candles, height = 400, onPatternD
               <span className="text-red-400 font-medium">${data.low.toFixed(2)}</span>
               <span className="text-gray-400">C:</span>
               <span className="text-white font-medium">${data.close.toFixed(2)}</span>
+              {data.signalPrice && (
+                <>
+                  <span className="text-gray-400">Signal:</span>
+                  <span className={`font-bold ${data.signal === 'BUY' ? 'text-green-400' : 'text-red-400'}`}>
+                    ${data.signalPrice.toFixed(2)}
+                  </span>
+                </>
+              )}
               {data.volume && (
                 <>
                   <span className="text-gray-400">Vol:</span>
@@ -206,8 +262,8 @@ export default function CandlestickOnlyChart({ candles, height = 400, onPatternD
       {/* Resistance Levels Legend */}
       {resistanceLevels && (
         <div className="px-4 py-2 border-b border-gray-800 bg-black/50">
-          <div className="flex items-center justify-between text-xs">
-            <div className="flex items-center gap-4">
+          <div className="flex items-center justify-between text-xs flex-wrap gap-2">
+            <div className="flex items-center gap-4 flex-wrap">
               <span className="text-gray-400 font-semibold">📊 24H LEVELS:</span>
               <div className="flex items-center gap-1">
                 <div className="w-3 h-0.5 bg-red-500"></div>
@@ -226,7 +282,7 @@ export default function CandlestickOnlyChart({ candles, height = 400, onPatternD
                 <span className="text-white font-bold">Current: ${resistanceLevels.currentPrice.toFixed(2)}</span>
               </div>
             </div>
-            <div className="flex items-center gap-3 text-xs">
+            <div className="flex items-center gap-3 text-xs flex-wrap">
               <span className={`font-semibold ${
                 resistanceLevels.currentPrice > resistanceLevels.fib50 
                   ? 'text-green-400' 
@@ -238,6 +294,20 @@ export default function CandlestickOnlyChart({ candles, height = 400, onPatternD
               <span className="text-orange-400">
                 Range: ${(resistanceLevels.high24h - resistanceLevels.low24h).toFixed(2)}
               </span>
+              {/* Buy/Sell Signals Count */}
+              {buySellSignals.length > 0 && (
+                <>
+                  <span className="text-gray-500">|</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-green-400 font-semibold">
+                      🟢 BUY: {buySellSignals.filter(s => s.signal === 'BUY').length}
+                    </span>
+                    <span className="text-red-400 font-semibold">
+                      🔴 SELL: {buySellSignals.filter(s => s.signal === 'SELL').length}
+                    </span>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -482,6 +552,12 @@ export default function CandlestickOnlyChart({ candles, height = 400, onPatternD
                 const bodyWidth = 6
                 const wickWidth = 1.5
                 
+                // Buy/Sell signal markers
+                const hasSignal = payload.signal === 'BUY' || payload.signal === 'SELL'
+                const signalY = payload.signalPrice ? yAxis.scale(payload.signalPrice) : null
+                const isBuy = payload.signal === 'BUY'
+                const signalColor = isBuy ? '#22c55e' : '#ef4444'
+                
                 return (
                   <g>
                     {/* Upper wick from high to body top */}
@@ -512,6 +588,83 @@ export default function CandlestickOnlyChart({ candles, height = 400, onPatternD
                       stroke={color}
                       strokeWidth={wickWidth}
                     />
+                    
+                    {/* Buy/Sell Signal Markers */}
+                    {hasSignal && signalY !== null && (
+                      <g>
+                        {/* Arrow pointing to signal price */}
+                        {isBuy ? (
+                          // BUY Signal - Green upward arrow below candle
+                          <g>
+                            <polygon
+                              points={`${cx},${signalY + 15} ${cx - 8},${signalY + 5} ${cx + 8},${signalY + 5}`}
+                              fill={signalColor}
+                              stroke="#ffffff"
+                              strokeWidth={1}
+                            />
+                            <text
+                              x={cx}
+                              y={signalY + 30}
+                              textAnchor="middle"
+                              fill={signalColor}
+                              fontSize="10"
+                              fontWeight="bold"
+                            >
+                              BUY
+                            </text>
+                            {/* Confidence indicator */}
+                            <circle
+                              cx={cx + 12}
+                              cy={signalY + 5}
+                              r={4}
+                              fill={payload.signalConfidence === 'HIGH' ? '#22c55e' : '#f59e0b'}
+                              stroke="#ffffff"
+                              strokeWidth={1}
+                            />
+                          </g>
+                        ) : (
+                          // SELL Signal - Red downward arrow above candle
+                          <g>
+                            <polygon
+                              points={`${cx},${signalY - 15} ${cx - 8},${signalY - 5} ${cx + 8},${signalY - 5}`}
+                              fill={signalColor}
+                              stroke="#ffffff"
+                              strokeWidth={1}
+                            />
+                            <text
+                              x={cx}
+                              y={signalY - 25}
+                              textAnchor="middle"
+                              fill={signalColor}
+                              fontSize="10"
+                              fontWeight="bold"
+                            >
+                              SELL
+                            </text>
+                            {/* Confidence indicator */}
+                            <circle
+                              cx={cx + 12}
+                              cy={signalY - 5}
+                              r={4}
+                              fill={payload.signalConfidence === 'HIGH' ? '#ef4444' : '#f59e0b'}
+                              stroke="#ffffff"
+                              strokeWidth={1}
+                            />
+                          </g>
+                        )}
+                        {/* Price line to signal */}
+                        <line
+                          x1={cx}
+                          y1={isBuy ? lowY : highY}
+                          x2={cx}
+                          y2={signalY}
+                          stroke={signalColor}
+                          strokeWidth={1.5}
+                          strokeDasharray="3 3"
+                          opacity={0.6}
+                        />
+                      </g>
+                    )}
                   </g>
                 )
               }}
