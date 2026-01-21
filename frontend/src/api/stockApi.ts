@@ -76,8 +76,28 @@ export const scanStocks = async (settings: ScannerSettings): Promise<ScanResult>
   } catch (error: any) {
     console.error('Error scanning stocks:', error)
     
-    // Check if it's a 429 rate limit error
+    // Check if it's a 429 rate limit error - lock the API for 24 hours
     if (error.response?.status === 429 || error.response?.data?.rateLimited || error.message?.includes('wait')) {
+      // Determine which API was used and lock it
+      const errorMessage = error?.message || ''
+      const responseData = error?.response?.data || {}
+      
+      // Check error message or response data for API name
+      if (errorMessage.includes('Yahoo') || errorMessage.includes('yahoo') || responseData.source?.includes('Yahoo')) {
+        lockApi('yahoo')
+      } else if (errorMessage.includes('SerpAPI') || errorMessage.includes('serpapi') || responseData.source?.includes('SerpAPI')) {
+        lockApi('serpapi')
+      } else if (errorMessage.includes('AlphaVantage') || errorMessage.includes('alphavantage') || responseData.source?.includes('AlphaVantage')) {
+        lockApi('alphavantage')
+      } else if (errorMessage.includes('Massive') || errorMessage.includes('massive') || errorMessage.includes('Polygon') || responseData.source?.includes('Massive')) {
+        lockApi('massive')
+      } else {
+        // Default: lock Yahoo if using Render backend (most common)
+        if (USE_RENDER_BACKEND) {
+          lockApi('yahoo')
+        }
+      }
+      
       const rateLimitError = new Error(error.message || '429 Too Many Requests - Rate Limited')
       ;(rateLimitError as any).isRateLimit = true
       throw rateLimitError
