@@ -855,54 +855,26 @@ class StockScanner:
         logging.info(f"✅ Info received for {symbol}: {info.get('longName', 'N/A')}")
         
         # Get historical data based on timeframe
-        # Period: How far back to fetch data
         period_map = {
-            # Intraday (limited to 7-60 days)
-            '1m': '1d',      # Max 7 days for 1m
-            '2m': '5d',      # Max 7 days for 2m
-            '3m': '5d',      # Max 7 days for 3m
-            '5m': '5d',      # Max 60 days for 5m
-            '15m': '5d',     # Max 60 days for 15m
-            '30m': '5d',     # Max 60 days for 30m
-            '90m': '60d',    # Max 60 days for 90m
-            '1h': '1mo',     # Max 60 days for 1h
-            # Daily and longer (full history)
-            '24h': '3mo',    # 3 months of daily data
-            '1week': 'max',  # Full history for weekly
-            '1month': '2y',  # 2 years for monthly
-            '3month': 'max', # Full history for quarterly
-            '6month': '1y',  # 1 year for 6-month view
-            '1year': '1y',   # 1 year of daily data
-            '2year': '2y',   # 2 years of daily data
-            '5year': '5y',   # 5 years of daily data
-            '10year': '10y', # 10 years of daily data
-            'ytd': 'ytd',    # Year-to-date
-            'max': 'max',    # Maximum available history
+            '1m': '1d',
+            '3m': '5d',
+            '5m': '5d',
+            '15m': '5d',
+            '30m': '5d',
+            '1h': '1mo',
+            '24h': '3mo',
+            '1month': '2y'  # 2 years to get enough monthly candles
         }
         
-        # Interval: Candle size
         interval_map = {
-            # Intraday intervals
             '1m': '1m',
-            '2m': '2m',
-            '3m': '2m',      # Use 2m for 3m (closest available)
+            '3m': '2m',
             '5m': '5m',
             '15m': '15m',
             '30m': '30m',
-            '90m': '90m',
             '1h': '1h',
-            # Daily and longer
-            '24h': '1d',     # Daily candles
-            '1week': '1wk',  # Weekly candles
-            '1month': '1mo', # Monthly candles
-            '3month': '3mo', # Quarterly candles
-            '6month': '1d',  # Daily candles for 6-month view
-            '1year': '1d',   # Daily candles for yearly view
-            '2year': '1d',   # Daily candles for 2-year view
-            '5year': '1d',   # Daily candles for 5-year view
-            '10year': '1d',  # Daily candles for 10-year view
-            'ytd': '1d',     # Daily candles for YTD
-            'max': '1d',     # Daily candles for max history
+            '24h': '1d',
+            '1month': '1mo'  # Monthly candles
         }
         
         period = period_map.get(timeframe, '5d')
@@ -1210,6 +1182,131 @@ def scan_stocks():
         return jsonify({
             'success': False,
             'error': error_msg
+        }), 500
+
+@app.route('/api/market-movers', methods=['GET'])
+def get_market_movers():
+    """Fetch real market movers from Yahoo Finance (similar to TradingView market movers)"""
+    try:
+        movers_type = request.args.get('type', 'gainers')  # gainers, losers, active
+        
+        # Fetch market movers using yfinance
+        import yfinance as yf
+        
+        # Yahoo Finance screener IDs
+        screener_map = {
+            'gainers': 'day_gainers',
+            'losers': 'day_losers',
+            'active': 'most_active'
+        }
+        
+        screener_id = screener_map.get(movers_type, 'day_gainers')
+        
+        # Use yfinance to get market movers
+        # Note: yfinance doesn't have direct screener support, so we'll use a workaround
+        # Fetch top stocks from S&P 500 and filter by performance
+        
+        stocks = []
+        
+        # Get S&P 500 tickers
+        import requests
+        sp500_url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+        try:
+            response = requests.get(sp500_url, timeout=10)
+            if response.status_code == 200:
+                import re
+                # Extract tickers from HTML
+                ticker_pattern = r'<a href="/wiki/([A-Z]+)" title="[^"]+">([A-Z]+)</a>'
+                matches = re.findall(ticker_pattern, response.text)
+                tickers = [match[1] for match in matches[:100]]  # Limit to first 100 for speed
+                
+                # Fetch data for each ticker
+                for symbol in tickers[:50]:  # Limit to 50 for performance
+                    try:
+                        ticker = yf.Ticker(symbol)
+                        info = ticker.info
+                        hist = ticker.history(period='1d', interval='5m')
+                        
+                        if hist.empty:
+                            continue
+                        
+                        current_price = float(hist['Close'].iloc[-1])
+                        previous_close = float(info.get('previousClose', current_price * 0.99))
+                        change = current_price - previous_close
+                        change_percent = (change / previous_close * 100) if previous_close > 0 else 0
+                        volume = int(info.get('volume', 0))
+                        
+                        # Filter based on movers type
+                        if movers_type == 'gainers' and change_percent < 2:
+                            continue
+                        if movers_type == 'losers' and change_percent > -2:
+                            continue
+                        
+                        # Generate candles
+                        candles = []
+                        for idx, row in hist.iterrows():
+                            candles.append({
+                                'time': idx.isoformat(),
+                                'open': round(float(row['Open']), 2),
+                                'high': round(float(row['High']), 2),
+                                'low': round(float(row['Low']), 2),
+                                'close': round(float(row['Close']), 2),
+                                'volume': int(row['Volume'])
+                            })
+                        
+                        # If no real candles, generate synthetic
+                        if not candles:
+                            candles = generate_synthetic_candles(symbol, previous_close, current_price, '5m')
+                        
+                        stocks.append({
+                            'symbol': symbol,
+                            'name': info.get('longName', symbol),
+                            'currentPrice': current_price,
+                            'previousClose': previous_close,
+                            'changeAmount': round(change, 2),
+                            'changePercent': round(change_percent, 2),
+                            'volume': volume,
+                            'avgVolume': int(info.get('averageVolume', volume)),
+                            'float': int(info.get('sharesOutstanding', 0)),
+                            'dayHigh': float(hist['High'].max()),
+                            'dayLow': float(hist['Low'].min()),
+                            'openPrice': float(hist['Open'].iloc[0]),
+                            'candles': candles,
+                            'chartData': {'5m': candles},
+                            'source': f'Yahoo Finance Market Movers ({movers_type})',
+                            'isHot': abs(change_percent) > 5,
+                            'signal': 'BUY' if change_percent > 3 else ('SELL' if change_percent < -3 else 'HOLD')
+                        })
+                        
+                        if len(stocks) >= 20:  # Limit to top 20
+                            break
+                    except Exception as e:
+                        logging.warning(f"⚠️ Error processing {symbol}: {e}")
+                        continue
+        except Exception as e:
+            logging.error(f"❌ Error fetching S&P 500 list: {e}")
+        
+        # Sort by change percent
+        if movers_type == 'gainers':
+            stocks.sort(key=lambda x: x['changePercent'], reverse=True)
+        elif movers_type == 'losers':
+            stocks.sort(key=lambda x: x['changePercent'])
+        elif movers_type == 'active':
+            stocks.sort(key=lambda x: x['volume'], reverse=True)
+        
+        return jsonify({
+            'success': True,
+            'stocks': stocks[:20],  # Return top 20
+            'count': len(stocks),
+            'type': movers_type,
+            'source': 'Yahoo Finance Market Movers'
+        })
+        
+    except Exception as e:
+        logging.error(f"❌ Error in get_market_movers: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
         }), 500
 
 @app.route('/api/daily-discovered', methods=['GET'])

@@ -20,7 +20,12 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
     const fetchDailyStocks = async () => {
       try {
         console.log(`🤖 Fetching today's discovered stocks with real charts...`)
-        const response = await fetch('http://localhost:5000/api/daily-discovered')
+        // Try to fetch real market movers first, then fall back to daily-discovered
+        let response = await fetch('http://localhost:5000/api/market-movers?type=gainers')
+        if (!response.ok) {
+          // Fallback to daily-discovered
+          response = await fetch('http://localhost:5000/api/daily-discovered')
+        }
         const data = await response.json()
         
         if (data.success && data.stocks.length > 0) {
