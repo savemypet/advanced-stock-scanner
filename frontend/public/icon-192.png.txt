@@ -1,0 +1,12 @@
+Icon placeholder - Create a 192x192 PNG image with your stock scanner logo.
+You can use:
+- Canva.com (free)
+- Photopea.com (free Photoshop alternative)
+- Or any image editor
+
+Recommended design:
+- Background: Blue gradient (#3b82f6)
+- Icon: Stock chart / trending up symbol
+- Style: Modern, clean, professional
+
+Save as: icon-192.png

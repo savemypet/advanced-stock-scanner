@@ -1,0 +1,4 @@
+Icon placeholder - Create a 512x512 PNG image with your stock scanner logo.
+Use same design as 192x192 icon, just larger resolution.
+
+Save as: icon-512.png
