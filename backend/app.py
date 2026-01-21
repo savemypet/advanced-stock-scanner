@@ -38,6 +38,12 @@ ALPHAVANTAGE_KEY = 'ED8M1QO531HEYLOS'  # AlphaVantage API key configured ✅
 ALPHAVANTAGE_BASE_URL = 'https://www.alphavantage.co/query'
 ALPHAVANTAGE_FREE_LIMIT = 25  # Daily free tier limit (25 API calls per day)
 
+# Massive.com Configuration (Fourth fallback - high frequency backup)
+MASSIVE_KEY = 'YOUR_MASSIVE_API_KEY'  # Get free key from: https://massive.com
+MASSIVE_BASE_URL = 'https://api.massive.com/v1'  # Placeholder URL
+MASSIVE_RATE_LIMIT = 5  # Free tier: 5 API calls per minute
+MASSIVE_RATE_WINDOW = 60  # 60 seconds (1 minute)
+
 # Smart API switching - automatically rotates between Yahoo, SerpAPI, and AlphaVantage
 use_yahoo_locked = False  # Yahoo Finance locked status
 yahoo_locked_until = None  # When Yahoo unlocks
@@ -50,6 +56,10 @@ FORCE_SERPAPI_MODE = False  # Let system auto-choose based on availability
 # AlphaVantage usage tracking
 alphavantage_calls_used = 0  # Track daily usage
 alphavantage_calls_reset_date = None  # Reset counter daily
+
+# Massive.com usage tracking (rate limiting per minute)
+massive_calls_history = []  # Track timestamps of API calls
+massive_calls_lock = threading.Lock()  # Thread-safe access
 
 # SerpAPI tracking
 use_serpapi_mode = False  # Switch to True when Yahoo + ScraperAPI both fail
@@ -151,6 +161,26 @@ def should_use_alphavantage() -> bool:
         return False
     
     return True
+
+def should_use_massive() -> bool:
+    """Check if we can use Massive.com (rate limit: 5 calls/minute)"""
+    global massive_calls_history
+    
+    with massive_calls_lock:
+        # Remove calls older than 1 minute
+        current_time = time.time()
+        massive_calls_history = [
+            call_time for call_time in massive_calls_history 
+            if current_time - call_time < MASSIVE_RATE_WINDOW
+        ]
+        
+        # Check if we're under the rate limit
+        if len(massive_calls_history) >= MASSIVE_RATE_LIMIT:
+            wait_time = int(MASSIVE_RATE_WINDOW - (current_time - massive_calls_history[0]))
+            logging.warning(f"⚠️ Massive.com rate limit reached ({len(massive_calls_history)}/{MASSIVE_RATE_LIMIT}/min), wait {wait_time}s")
+            return False
+        
+        return True
 
 def lock_yahoo_finance():
     """Lock Yahoo Finance for 2 hours (switches to SerpAPI)"""
@@ -429,6 +459,96 @@ def track_alphavantage_usage():
     remaining = ALPHAVANTAGE_FREE_LIMIT - alphavantage_calls_used
     logging.info(f"🔍 AlphaVantage call #{alphavantage_calls_used}/{ALPHAVANTAGE_FREE_LIMIT} today ({remaining} remaining)")
 
+def fetch_stock_from_massive(symbol: str) -> Dict[str, Any]:
+    """Fetch stock data from Massive.com as fourth fallback (5 calls/minute)"""
+    track_massive_usage()
+    
+    if MASSIVE_KEY == 'YOUR_MASSIVE_API_KEY':
+        logging.error("❌ Massive.com key not configured! Get free key from https://massive.com")
+        return None
+    
+    try:
+        logging.info(f"🔍 Fetching {symbol} from Massive.com...")
+        
+        # Massive.com API endpoint (adjust based on actual API documentation)
+        params = {
+            'symbol': symbol,
+            'apikey': MASSIVE_KEY
+        }
+        
+        response = requests.get(f"{MASSIVE_BASE_URL}/quote", params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Extract data (adjust based on actual API response format)
+        current_price = float(data.get('price', 0))
+        previous_close = float(data.get('previousClose', current_price))
+        open_price = float(data.get('open', current_price))
+        day_high = float(data.get('high', current_price))
+        day_low = float(data.get('low', current_price))
+        volume = int(data.get('volume', 1000000))
+        
+        change_amount = current_price - previous_close
+        change_percent = (change_amount / previous_close) * 100 if previous_close > 0 else 0
+        
+        logging.info(f"✅ Successfully fetched {symbol} from Massive.com: ${current_price} ({change_percent:+.2f}%)")
+        
+        # Generate synthetic candles (rate limit is tight at 5/min, save quota)
+        logging.info(f"📊 Generating synthetic candles for {symbol} (saving Massive.com quota)")
+        candles = []
+        base_time = datetime.now() - timedelta(hours=5)
+        for i in range(60):
+            progress = i / 60.0
+            price = previous_close + (change_amount * progress)
+            candles.append({
+                'time': (base_time + timedelta(minutes=i*5)).isoformat(),
+                'open': price,
+                'high': price * 1.005,
+                'low': price * 0.995,
+                'close': price,
+                'volume': volume // 60
+            })
+        
+        return {
+            'symbol': symbol,
+            'name': symbol,
+            'currentPrice': round(current_price, 2),
+            'previousClose': round(previous_close, 2),
+            'openPrice': round(open_price, 2),
+            'dayHigh': round(day_high, 2),
+            'dayLow': round(day_low, 2),
+            'volume': volume,
+            'avgVolume': volume,
+            'float': 10_000_000,  # Placeholder
+            'changePercent': round(change_percent, 2),
+            'changeAmount': round(change_amount, 2),
+            'candles': candles,
+            'chartData': {'5m': candles},
+            'lastUpdated': datetime.now().isoformat(),
+            'dataSource': 'Massive.com'
+        }
+        
+    except Exception as e:
+        logging.error(f"❌ Massive.com error for {symbol}: {str(e)}")
+        return None
+
+def track_massive_usage():
+    """Track Massive.com API usage (rate limit: 5 calls/minute)"""
+    global massive_calls_history
+    
+    with massive_calls_lock:
+        current_time = time.time()
+        massive_calls_history.append(current_time)
+        
+        # Clean up old calls (older than 1 minute)
+        massive_calls_history = [
+            call_time for call_time in massive_calls_history 
+            if current_time - call_time < MASSIVE_RATE_WINDOW
+        ]
+        
+        remaining = MASSIVE_RATE_LIMIT - len(massive_calls_history)
+        logging.info(f"🔍 Massive.com call #{len(massive_calls_history)}/{MASSIVE_RATE_LIMIT}/min ({remaining} remaining)")
+
 def fetch_news_for_stock(symbol: str) -> List[Dict[str, Any]]:
     """Fetch today's news for a specific stock from Finnhub"""
     global finnhub_api_calls_today
@@ -621,13 +741,29 @@ class StockScanner:
                         logging.info(f"✅ Successfully fetched {symbol} from AlphaVantage")
                         return alphavantage_data
                     else:
-                        logging.warning(f"⚠️ AlphaVantage returned no data for {symbol}")
+                        logging.warning(f"⚠️ AlphaVantage returned no data for {symbol}, trying Massive.com...")
+                        # Fall through to Massive.com
+                except Exception as e:
+                    logging.error(f"❌ AlphaVantage failed for {symbol}: {str(e)}, trying Massive.com...")
+                    # Fall through to Massive.com
+            
+            # Priority 4: Try Massive.com (if all others exhausted/failed, and rate limit allows)
+            if should_use_massive():
+                logging.info(f"🌐 Using Massive.com for {symbol} (Yahoo locked: {use_yahoo_locked}, SerpAPI: {serpapi_calls_used}/{SERPAPI_FREE_LIMIT}, AlphaVantage: {alphavantage_calls_used}/{ALPHAVANTAGE_FREE_LIMIT})")
+                try:
+                    massive_data = fetch_stock_from_massive(symbol)
+                    if massive_data:
+                        logging.info(f"✅ Successfully fetched {symbol} from Massive.com")
+                        return massive_data
+                    else:
+                        logging.warning(f"⚠️ Massive.com returned no data for {symbol}")
                         return None
                 except Exception as e:
-                    logging.error(f"❌ AlphaVantage failed for {symbol}: {str(e)}")
+                    logging.error(f"❌ Massive.com failed for {symbol}: {str(e)}")
                     return None
             else:
-                logging.error(f"❌ All APIs unavailable for {symbol}: Yahoo (locked), SerpAPI ({serpapi_calls_used}/{SERPAPI_FREE_LIMIT}), AlphaVantage ({alphavantage_calls_used}/{ALPHAVANTAGE_FREE_LIMIT})")
+                massive_count = len(massive_calls_history) if 'massive_calls_history' in globals() else 0
+                logging.error(f"❌ All APIs unavailable for {symbol}: Yahoo (locked), SerpAPI ({serpapi_calls_used}/{SERPAPI_FREE_LIMIT}), AlphaVantage ({alphavantage_calls_used}/{ALPHAVANTAGE_FREE_LIMIT}), Massive.com ({massive_count}/{MASSIVE_RATE_LIMIT}/min)")
                 return None
                 
         except Exception as e:
@@ -845,6 +981,7 @@ def scan_stocks():
         yahoo_available = should_use_yahoo()
         serpapi_available = should_use_serpapi()
         alphavantage_available = should_use_alphavantage()
+        massive_available = should_use_massive()
         
         # Determine active source
         if yahoo_available:
@@ -853,8 +990,19 @@ def scan_stocks():
             active_source = 'SerpAPI'
         elif alphavantage_available:
             active_source = 'AlphaVantage'
+        elif massive_available:
+            active_source = 'Massive.com'
         else:
             active_source = 'None (all exhausted)'
+        
+        # Massive.com call count (last minute)
+        with massive_calls_lock:
+            current_time = time.time()
+            massive_recent_calls = [
+                call for call in massive_calls_history 
+                if current_time - call < MASSIVE_RATE_WINDOW
+            ]
+            massive_calls_count = len(massive_recent_calls)
         
         api_status = {
             'yahooLocked': use_yahoo_locked,
@@ -869,8 +1017,14 @@ def scan_stocks():
                 'limit': ALPHAVANTAGE_FREE_LIMIT,
                 'remaining': ALPHAVANTAGE_FREE_LIMIT - alphavantage_calls_used
             },
+            'massiveRateLimit': {
+                'used': massive_calls_count,
+                'limit': MASSIVE_RATE_LIMIT,
+                'remaining': MASSIVE_RATE_LIMIT - massive_calls_count,
+                'window': f'{MASSIVE_RATE_WINDOW}s'
+            },
             'activeSource': active_source,
-            'fallbackAvailable': serpapi_available or alphavantage_available
+            'fallbackAvailable': serpapi_available or alphavantage_available or massive_available
         }
         
         return jsonify({
