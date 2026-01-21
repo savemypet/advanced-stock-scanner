@@ -695,27 +695,42 @@ class StockScanner:
         self.volume_multiplier = 2.0
         
     def get_stock_data(self, symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
-        """Fetch real-time stock data with Massive.com as primary API"""
+        """Fetch real-time stock data with Massive.com as primary API (5 calls/min)"""
         try:
             logging.info(f"🔍 Fetching data for {symbol} (timeframe: {timeframe})")
             
-            # SMART AUTO-SWITCHING LOGIC (Massive.com First!)
-            # Priority 1: Try Massive.com FIRST (rate limit allows)
+            # SMART AUTO-SWITCHING LOGIC (Massive.com First - 5 calls/min refresh!)
+            # Priority 1: Try Massive.com FIRST (best for real-time: 5 calls/min)
             if should_use_massive():
-                logging.info(f"⚡ Using Massive.com for {symbol} (PRIMARY API)")
+                logging.info(f"⚡ Using Massive.com for {symbol} (PRIMARY API - 5/min)")
                 try:
                     massive_data = fetch_stock_from_massive(symbol)
                     if massive_data:
                         logging.info(f"✅ Successfully fetched {symbol} from Massive.com")
                         return massive_data
                     else:
-                        logging.warning(f"⚠️ Massive.com returned no data for {symbol}, trying Yahoo...")
+                        logging.warning(f"⚠️ Massive.com returned no data for {symbol}, trying AlphaVantage...")
+                        # Fall through to AlphaVantage
+                except Exception as e:
+                    logging.error(f"❌ Massive.com failed for {symbol}: {str(e)}, trying AlphaVantage...")
+                    # Fall through to AlphaVantage
+            
+            # Priority 2: Try AlphaVantage (if Massive rate-limited - 25/day)
+            if should_use_alphavantage():
+                logging.info(f"🌐 Using AlphaVantage for {symbol} (Massive rate-limited)")
+                try:
+                    alphavantage_data = fetch_stock_from_alphavantage(symbol)
+                    if alphavantage_data:
+                        logging.info(f"✅ Successfully fetched {symbol} from AlphaVantage")
+                        return alphavantage_data
+                    else:
+                        logging.warning(f"⚠️ AlphaVantage returned no data for {symbol}, trying Yahoo...")
                         # Fall through to Yahoo
                 except Exception as e:
-                    logging.error(f"❌ Massive.com failed for {symbol}: {str(e)}, trying Yahoo...")
+                    logging.error(f"❌ AlphaVantage failed for {symbol}: {str(e)}, trying Yahoo...")
                     # Fall through to Yahoo
             
-            # Priority 2: Try Yahoo Finance (if Massive rate-limited or failed)
+            # Priority 3: Try Yahoo Finance (if AlphaVantage and Massive failed)
             if should_use_yahoo():
                 logging.info(f"🌐 Using Yahoo Finance for {symbol}")
                 try:
@@ -733,7 +748,7 @@ class StockScanner:
                         # Fall through to next API
                         pass
             
-            # Priority 3: Try SerpAPI (if Massive and Yahoo failed, and SerpAPI has quota)
+            # Priority 4: Try SerpAPI (last resort)
             if should_use_serpapi():
                 logging.info(f"🌐 Using SerpAPI for {symbol} (Yahoo locked: {use_yahoo_locked})")
                 try:
@@ -742,29 +757,14 @@ class StockScanner:
                         logging.info(f"✅ Successfully fetched {symbol} from SerpAPI")
                         return serpapi_data
                     else:
-                        logging.warning(f"⚠️ SerpAPI returned no data for {symbol}, trying AlphaVantage...")
-                        # Fall through to AlphaVantage
-                except Exception as e:
-                    logging.error(f"❌ SerpAPI failed for {symbol}: {str(e)}, trying AlphaVantage...")
-                    # Fall through to AlphaVantage
-            
-            # Priority 4: Try AlphaVantage (last resort)
-            if should_use_alphavantage():
-                logging.info(f"🌐 Using AlphaVantage for {symbol} (Yahoo locked: {use_yahoo_locked}, SerpAPI: {serpapi_calls_used}/{SERPAPI_FREE_LIMIT})")
-                try:
-                    alphavantage_data = fetch_stock_from_alphavantage(symbol)
-                    if alphavantage_data:
-                        logging.info(f"✅ Successfully fetched {symbol} from AlphaVantage")
-                        return alphavantage_data
-                    else:
-                        logging.warning(f"⚠️ AlphaVantage returned no data for {symbol}")
+                        logging.warning(f"⚠️ SerpAPI returned no data for {symbol}")
                         return None
                 except Exception as e:
-                    logging.error(f"❌ AlphaVantage failed for {symbol}: {str(e)}")
+                    logging.error(f"❌ SerpAPI failed for {symbol}: {str(e)}")
                     return None
             else:
                 massive_count = len(massive_calls_history) if 'massive_calls_history' in globals() else 0
-                logging.error(f"❌ All APIs unavailable for {symbol}: Massive.com ({massive_count}/{MASSIVE_RATE_LIMIT}/min), Yahoo (locked), SerpAPI ({serpapi_calls_used}/{SERPAPI_FREE_LIMIT}), AlphaVantage ({alphavantage_calls_used}/{ALPHAVANTAGE_FREE_LIMIT})")
+                logging.error(f"❌ All APIs unavailable for {symbol}: AlphaVantage ({alphavantage_calls_used}/{ALPHAVANTAGE_FREE_LIMIT}), Massive.com ({massive_count}/{MASSIVE_RATE_LIMIT}/min), Yahoo (locked), SerpAPI ({serpapi_calls_used}/{SERPAPI_FREE_LIMIT})")
                 return None
                 
         except Exception as e:
@@ -984,15 +984,15 @@ def scan_stocks():
         alphavantage_available = should_use_alphavantage()
         massive_available = should_use_massive()
         
-        # Determine active source (Massive.com is now PRIMARY)
+        # Determine active source (Massive.com is PRIMARY - fastest refresh at 5/min)
         if massive_available:
             active_source = 'Massive.com'
+        elif alphavantage_available:
+            active_source = 'AlphaVantage'
         elif yahoo_available:
             active_source = 'Yahoo Finance'
         elif serpapi_available:
             active_source = 'SerpAPI'
-        elif alphavantage_available:
-            active_source = 'AlphaVantage'
         else:
             active_source = 'None (all exhausted)'
         

@@ -166,10 +166,10 @@ function App() {
             localStorage.removeItem('rateLimitedUntil')
             console.log(`✅ Backend using ${result.apiStatus.activeSource} - Frontend unlocked`)
           } else {
-            // ALL APIs exhausted - show lockout
-            console.warn('⚠️ All APIs exhausted - locking frontend')
+            // ALL APIs exhausted - Massive.com will refresh in 60 seconds max
+            console.warn('⚠️ All APIs temporarily exhausted - Massive.com refreshes in 60s')
             setRateLimited(true)
-            const readyAt = new Date(Date.now() + 60 * 60 * 1000) // 1 hour
+            const readyAt = new Date(Date.now() + 60 * 1000) // 60 seconds (Massive.com refresh)
             setReadyTime(readyAt)
             localStorage.setItem('rateLimitedUntil', readyAt.toISOString())
           }
@@ -231,15 +231,15 @@ function App() {
               duration: 5000
             })
           } else {
-            // ALL APIs exhausted - lock frontend
+            // ALL APIs temporarily exhausted - Massive.com refreshes in 60s
             setRateLimited(true)
-            const readyAt = new Date(Date.now() + 60 * 60 * 1000) // 1 hour
+            const readyAt = new Date(Date.now() + 60 * 1000) // 60 seconds (Massive.com refresh)
             setReadyTime(readyAt)
             localStorage.setItem('rateLimitedUntil', readyAt.toISOString())
             
-            toast.error('All APIs Exhausted', {
-              description: `All data sources rate-limited. Try again in 1 hour.`,
-              duration: 10000
+            toast.warning('APIs Temporarily Exhausted', {
+              description: `Massive.com (5/min) will refresh in 60 seconds. Scanner will auto-resume!`,
+              duration: 8000
             })
           }
         } else {
@@ -403,39 +403,39 @@ function App() {
     <div className="min-h-screen bg-background text-foreground">
       <Toaster position="top-right" richColors />
       
-      {/* Rate Limit Banner */}
+      {/* Temporary Pause Banner (60s for Massive.com refresh) */}
       {rateLimited && readyTime && readyCountdown > 0 && (
-        <div className="bg-red-500/10 border-b-4 border-red-500/40 sticky top-0 z-50">
+        <div className="bg-yellow-500/10 border-b-4 border-yellow-500/40 sticky top-0 z-50">
           <div className="container mx-auto px-3 sm:px-4 py-3 sm:py-4">
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                  <span className="text-sm font-semibold text-red-600 dark:text-red-400">
-                    🔒 LOCKED - All APIs Exhausted (Massive, Yahoo, SerpAPI, AlphaVantage)
+                  <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
+                  <span className="text-sm font-semibold text-yellow-600 dark:text-yellow-400">
+                    ⏳ Temporary Pause - Massive.com (5/min) Refreshing...
                   </span>
                 </div>
                 <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2 sm:gap-3">
                   <div className="flex flex-col items-end">
-                    <span className="text-xs font-medium text-red-700 dark:text-red-300">
-                      Ready at: {readyTime.toLocaleTimeString()}
+                    <span className="text-xs font-medium text-yellow-700 dark:text-yellow-300">
+                      Resuming at: {readyTime.toLocaleTimeString()}
                     </span>
-                    <span className="text-xs text-red-600/70 dark:text-red-400/70">
-                      {Math.floor(readyCountdown / 3600) > 0 
-                        ? `${Math.floor(readyCountdown / 3600)} hour${Math.floor(readyCountdown / 3600) !== 1 ? 's' : ''} ${Math.floor((readyCountdown % 3600) / 60)} min remaining`
+                    <span className="text-xs text-yellow-600/70 dark:text-yellow-400/70">
+                      {readyCountdown < 60 
+                        ? `${readyCountdown} seconds remaining`
                         : `${Math.floor(readyCountdown / 60)} minutes remaining`
                       }
                     </span>
                   </div>
-                  <div className="px-4 py-1.5 rounded-full bg-red-500/20 border-2 border-red-500/40">
-                    <span className="text-base font-bold text-red-600 dark:text-red-400 tabular-nums">
+                  <div className="px-4 py-1.5 rounded-full bg-yellow-500/20 border-2 border-yellow-500/40">
+                    <span className="text-base font-bold text-yellow-600 dark:text-yellow-400 tabular-nums">
                       ⏱️ {formatCountdown(readyCountdown)}
                     </span>
                   </div>
                 </div>
               </div>
-              <div className="text-xs text-red-600 dark:text-red-400 bg-red-500/5 px-3 py-2 rounded border border-red-500/20">
-                ⚠️ <strong>IMPORTANT:</strong> All data sources are exhausted. The scanner will automatically resume when any API quota resets (Massive: 1 min, AlphaVantage: daily, SerpAPI: monthly, Yahoo: varies).
+              <div className="text-xs text-yellow-600 dark:text-yellow-400 bg-yellow-500/5 px-3 py-2 rounded border border-yellow-500/20">
+                💡 <strong>Auto-Resume:</strong> Massive.com provides 5 calls/minute that refresh every 60 seconds. Scanner will automatically resume when quota resets!
               </div>
             </div>
           </div>
