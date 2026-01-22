@@ -811,35 +811,47 @@ def connect_ibkr():
             return False
 
 def is_market_open() -> bool:
-    """Check if US stock market is currently open"""
+    """Check if US stock market is currently open (9:30 AM - 4:00 PM ET, Mon-Fri)"""
     from datetime import datetime, time
     
     try:
         if pytz:
-            # US Eastern Time
+            # US Eastern Time (market timezone)
             et = pytz.timezone('US/Eastern')
             now_et = datetime.now(et)
             current_time = now_et.time()
             current_day = now_et.weekday()  # 0=Monday, 6=Sunday
+            
+            logging.info(f"🕐 Market status check: ET={now_et.strftime('%Y-%m-%d %H:%M:%S %Z')}, Day={current_day}, Time={current_time}")
         else:
-            # Fallback without pytz (less accurate)
+            # Fallback without pytz (less accurate - uses local time)
             now_et = datetime.now()
             current_time = now_et.time()
             current_day = now_et.weekday()
+            logging.warning("⚠️ pytz not available - using local time (may be inaccurate)")
         
         # Market hours: 9:30 AM - 4:00 PM ET, Monday-Friday
-        market_open = time(9, 30)
-        market_close = time(16, 0)
+        market_open_time = time(9, 30)
+        market_close_time = time(16, 0)
         
-        # Check if it's a weekday
-        if current_day >= 5:  # Saturday or Sunday
+        # Check if it's a weekday (Monday=0, Friday=4)
+        if current_day >= 5:  # Saturday (5) or Sunday (6)
+            logging.info("📴 Market is CLOSED (Weekend)")
             return False
         
         # Check if within market hours
-        return market_open <= current_time <= market_close
+        is_open = market_open_time <= current_time <= market_close_time
+        if is_open:
+            logging.info("✅ Market is OPEN")
+        else:
+            logging.info(f"📴 Market is CLOSED (Current: {current_time}, Hours: {market_open_time}-{market_close_time})")
+        
+        return is_open
     except Exception as e:
-        logging.warning(f"⚠️ Could not determine market status: {e}")
-        return True  # Assume open if can't determine
+        logging.error(f"❌ Error determining market status: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
+        return False  # Assume closed if can't determine (safer)
 
 def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
     """Fetch stock data from Interactive Brokers API (DEFAULT)"""
