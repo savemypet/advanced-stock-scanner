@@ -106,7 +106,7 @@ function App() {
         setReadyTime(null)
         localStorage.removeItem('rateLimitedUntil')
         
-        // Check for new stocks
+        // Check for new stocks (silent - no popups)
         if (settings.notificationsEnabled && settings.notifyOnNewStocks) {
           const currentSymbols = new Set(stocksWithPatterns.map(s => s.symbol))
           const newSymbols = Array.from(currentSymbols).filter(
@@ -114,19 +114,11 @@ function App() {
           )
           
           if (newSymbols.length > 0 && previousStocksRef.current.size > 0) {
+            // Log new stocks to console instead of showing popup
             newSymbols.forEach(symbol => {
               const stock = stocksWithPatterns.find(s => s.symbol === symbol)
               if (stock) {
-                // Enhanced notification with pattern detection
-                let description = `${symbol} now qualifies - ${stock.changePercent.toFixed(2)}% gain`
-                if ((stock as any).detectedPattern) {
-                  const pattern = (stock as any).detectedPattern
-                  description += ` 🧠 Pattern: ${pattern.name} (${pattern.signal})`
-                }
-                
-                toast.success(`New Stock Alert!`, {
-                  description
-                })
+                console.log(`🆕 New stock: ${symbol} - ${stock.changePercent.toFixed(2)}% gain`)
               }
             })
           }
@@ -139,11 +131,8 @@ function App() {
       }
     } catch (error: any) {
       console.error('Scan error:', error)
-      
-      // IBKR only mode - no rate limits, just show error
-      toast.error('Failed to scan stocks', {
-        description: error?.message || 'Please check your connection and make sure IB Gateway is running'
-      })
+      // IBKR only mode - log error but don't show popup
+      // Errors are logged to console for debugging
     } finally {
       setIsLoading(false)
     }
@@ -228,18 +217,7 @@ function App() {
   const toggleAutoRefresh = () => {
     const newSettings = { ...settings, realTimeUpdates: !settings.realTimeUpdates }
     setSettings(newSettings)
-    
-    if (!settings.realTimeUpdates) {
-      // Turning ON - show notification
-      toast.success('Auto-Refresh Enabled', {
-        description: `Scanning every ${settings.updateInterval} seconds`
-      })
-    } else {
-      // Turning OFF - show notification
-      toast.info('Auto-Refresh Paused', {
-        description: 'Click Refresh button to scan manually'
-      })
-    }
+    // No popup notifications - silent toggle
   }
 
   // Removed formatCountdown - no rate limit countdown needed
