@@ -19,12 +19,16 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
   useEffect(() => {
     const fetchDailyStocks = async () => {
       try {
-        console.log(`🤖 Fetching today's discovered stocks with real charts...`)
-        // Try to fetch real market movers first, then fall back to daily-discovered
+        console.log(`🤖 Fetching stocks for AI analysis...`)
+        // Try to fetch real market movers first, then preloaded stocks, then daily-discovered
         let response = await fetch('http://localhost:5000/api/market-movers?type=gainers')
         if (!response.ok) {
-          // Fallback to daily-discovered
-          response = await fetch('http://localhost:5000/api/daily-discovered')
+          // Fallback to preloaded stocks (works even when market is closed)
+          response = await fetch('http://localhost:5000/api/preload-stocks')
+          if (!response.ok) {
+            // Final fallback to daily-discovered
+            response = await fetch('http://localhost:5000/api/daily-discovered')
+          }
         }
         const data = await response.json()
         
