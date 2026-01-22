@@ -30,32 +30,74 @@ export default function ConnectionLog({ isOpen, onToggle }: ConnectionLogProps) 
 
   // Poll for connection status and logs
   useEffect(() => {
-    const fetchStatus = async () => {
+    let lastLogCount = 0
+    
+    const fetchStatusAndLogs = async () => {
       try {
-        const response = await fetch('/api/health')
-        const data = await response.json()
-        setConnectionStatus(data.ibkrConnected ? 'connected' : 'disconnected')
+        // Fetch health status
+        const healthResponse = await fetch('/api/health')
+        const healthData = await healthResponse.json()
+        setConnectionStatus(healthData.ibkrConnected ? 'connected' : 'disconnected')
         setLastUpdate(new Date())
         
-        // Add status log
-        addLog(
-          data.ibkrConnected ? 'success' : 'error',
-          `IBKR ${data.ibkrConnected ? 'Connected' : 'Disconnected'}`,
-          data.ibkrConnected 
-            ? `Port: ${data.ibkrPort || 'N/A'}, Host: ${data.ibkrHost || 'N/A'}`
-            : 'Check TWS/IB Gateway is running'
-        )
+        // Add detailed status log with error info
+        if (healthData.ibkrConnected) {
+          addLog(
+            'success',
+            `IBKR Connected`,
+            `Host: ${healthData.ibkrHost || 'N/A'}, Port: ${healthData.ibkrPort || 'N/A'}, Username: ${healthData.ibkrUsername || 'N/A'}`
+          )
+        } else {
+          addLog(
+            'error',
+            `IBKR Disconnected`,
+            healthData.connectionError || `Host: ${healthData.ibkrHost || 'N/A'}, Port: ${healthData.ibkrPort || 'N/A'}. Check TWS/IB Gateway is running and API is enabled.`
+          )
+        }
+        
+        // Fetch detailed logs from backend
+        try {
+          const logsResponse = await fetch('/api/logs')
+          const logsData = await logsResponse.json()
+          
+          if (logsData.success && logsData.logs) {
+            // Only add new logs (compare count)
+            if (logsData.count > lastLogCount) {
+              const newLogs = logsData.logs.slice(lastLogCount)
+              newLogs.forEach((log: any) => {
+                const level = log.level?.toLowerCase() || 'info'
+                let logType: LogEntry['type'] = 'info'
+                if (level === 'error' || level === 'critical') {
+                  logType = 'error'
+                } else if (level === 'warning') {
+                  logType = 'warning'
+                } else if (level === 'info' && log.message?.includes('✅')) {
+                  logType = 'success'
+                }
+                
+                addLog(
+                  logType,
+                  log.message || 'No message',
+                  log.module ? `Module: ${log.module}, Function: ${log.funcName}, Line: ${log.lineno}` : undefined
+                )
+              })
+              lastLogCount = logsData.count
+            }
+          }
+        } catch (logError) {
+          // Silently fail - logs endpoint might not be available
+        }
       } catch (error) {
         setConnectionStatus('disconnected')
-        addLog('error', 'Backend not responding', 'Cannot reach backend API')
+        addLog('error', 'Backend not responding', `Cannot reach backend API: ${error instanceof Error ? error.message : 'Unknown error'}`)
       }
     }
 
     // Initial fetch
-    fetchStatus()
+    fetchStatusAndLogs()
 
-    // Poll every 5 seconds
-    intervalRef.current = setInterval(fetchStatus, 5000)
+    // Poll every 3 seconds for more responsive updates
+    intervalRef.current = setInterval(fetchStatusAndLogs, 3000)
 
     return () => {
       if (intervalRef.current) {
@@ -102,17 +144,27 @@ export default function ConnectionLog({ isOpen, onToggle }: ConnectionLogProps) 
   }, [])
 
   const addLog = (type: LogEntry['type'], message: string, details?: string) => {
-    const newLog: LogEntry = {
-      id: `${Date.now()}-${Math.random()}`,
-      timestamp: new Date(),
-      type,
-      message: message.substring(0, 200), // Limit message length
-      details
-    }
+    // Avoid duplicate logs (same message within 1 second)
+    const now = Date.now()
     setLogs(prev => {
+      const recent = prev.filter(log => 
+        log.message === message && 
+        now - log.timestamp.getTime() < 1000
+      )
+      if (recent.length > 0) {
+        return prev // Skip duplicate
+      }
+      
+      const newLog: LogEntry = {
+        id: `${now}-${Math.random()}`,
+        timestamp: new Date(),
+        type,
+        message: message.substring(0, 500), // Increased limit for detailed errors
+        details: details ? details.substring(0, 300) : undefined
+      }
       const updated = [...prev, newLog]
-      // Keep only last 100 logs
-      return updated.slice(-100)
+      // Keep only last 200 logs for more history
+      return updated.slice(-200)
     })
   }
 
@@ -199,7 +251,7 @@ export default function ConnectionLog({ isOpen, onToggle }: ConnectionLogProps) 
 
       {/* Log Content */}
       {isOpen && (
-        <div className="h-64 overflow-y-auto bg-black/90 text-green-400 font-mono text-xs p-4">
+        <div className="h-80 overflow-y-auto bg-black/95 text-green-400 font-mono text-xs p-4">
           {logs.length === 0 ? (
             <div className="text-muted-foreground text-center py-8">
               No logs yet. Activity will appear here...
@@ -207,21 +259,21 @@ export default function ConnectionLog({ isOpen, onToggle }: ConnectionLogProps) 
           ) : (
             <div className="space-y-1">
               {logs.map((log) => (
-                <div key={log.id} className="flex items-start gap-2 hover:bg-white/5 px-2 py-1 rounded">
+                <div key={log.id} className="flex items-start gap-2 hover:bg-white/10 px-2 py-1 rounded border-l-2 border-transparent hover:border-white/20 transition-colors">
                   <div className="flex-shrink-0 mt-0.5">
                     {getLogIcon(log.type)}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-gray-500">
+                    <div className="flex items-start gap-2 flex-wrap">
+                      <span className="text-gray-500 flex-shrink-0">
                         {log.timestamp.toLocaleTimeString()}
                       </span>
-                      <span className={`${getLogColor(log.type)} break-words`}>
+                      <span className={`${getLogColor(log.type)} break-words flex-1`}>
                         {log.message}
                       </span>
                     </div>
                     {log.details && (
-                      <div className="text-gray-500 text-xs ml-6 mt-0.5">
+                      <div className="text-gray-400 text-xs ml-6 mt-1 italic border-l-2 border-gray-700 pl-2">
                         {log.details}
                       </div>
                     )}

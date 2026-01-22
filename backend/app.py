@@ -650,31 +650,52 @@ def connect_ibkr():
     global IBKR_CONNECTED, IBKR_INSTANCE
     
     if not IBKR_AVAILABLE:
+        logging.error("❌ [IBKR] ib_insync not available - install with: pip install ib_insync")
         return False
     
     with IBKR_LOCK:
         if IBKR_CONNECTED and IBKR_INSTANCE and IBKR_INSTANCE.isConnected():
+            logging.debug("✅ [IBKR] Already connected")
             return True
         
         try:
             if IBKR_INSTANCE is None:
+                logging.info(f"🔌 [IBKR] Initializing IB instance...")
                 IBKR_INSTANCE = IB()
                 # Start the event loop for ib_insync (required for async operations)
                 util.startLoop()
+                logging.info("✅ [IBKR] IB instance initialized")
             
             if not IBKR_INSTANCE.isConnected():
-                logging.info(f"🔌 Connecting to Interactive Brokers at {IBKR_HOST}:{IBKR_PORT}...")
+                logging.info(f"🔌 [IBKR] Connecting to {IBKR_HOST}:{IBKR_PORT} (Client ID: {IBKR_CLIENT_ID})...")
+                logging.info(f"🔌 [IBKR] Username: {IBKR_USERNAME}")
                 IBKR_INSTANCE.connect(IBKR_HOST, IBKR_PORT, clientId=IBKR_CLIENT_ID)
                 IBKR_CONNECTED = True
-                logging.info("✅ Connected to Interactive Brokers!")
+                logging.info("✅ [IBKR] Successfully connected to Interactive Brokers!")
+                logging.info(f"✅ [IBKR] Connection details - Host: {IBKR_HOST}, Port: {IBKR_PORT}, Client ID: {IBKR_CLIENT_ID}")
                 return True
             else:
                 IBKR_CONNECTED = True
+                logging.info("✅ [IBKR] Already connected (verified)")
                 return True
+        except ConnectionRefusedError as e:
+            error_msg = f"Connection refused to {IBKR_HOST}:{IBKR_PORT}"
+            logging.error(f"❌ [IBKR] {error_msg}")
+            logging.error(f"❌ [IBKR] Error details: {str(e)}")
+            logging.error("💡 [IBKR] Make sure TWS or IB Gateway is running")
+            logging.error("💡 [IBKR] Check: Configure > API > Settings > Enable ActiveX and Socket Clients")
+            logging.error(f"💡 [IBKR] Verify port {IBKR_PORT} is correct (7497 for TWS paper, 4001 for IB Gateway)")
+            IBKR_CONNECTED = False
+            return False
         except Exception as e:
-            logging.warning(f"⚠️ Could not connect to Interactive Brokers: {e}")
-            logging.info("💡 Make sure TWS or IB Gateway is running and API is enabled")
-            logging.info("💡 Also check: Configure > API > Settings > Enable ActiveX and Socket Clients")
+            error_type = type(e).__name__
+            error_msg = str(e)
+            logging.error(f"❌ [IBKR] Connection failed: {error_type}")
+            logging.error(f"❌ [IBKR] Error message: {error_msg}")
+            logging.error(f"💡 [IBKR] Make sure TWS or IB Gateway is running and API is enabled")
+            logging.error(f"💡 [IBKR] Check: Configure > API > Settings > Enable ActiveX and Socket Clients")
+            if "already connected" in error_msg.lower():
+                logging.warning("⚠️ [IBKR] Already connected to another client - check Client ID")
             IBKR_CONNECTED = False
             return False
 
@@ -2264,10 +2285,58 @@ def preload_stocks():
             'date': daily_discovered_date.isoformat()
         })
 
+# In-memory log storage for connection log (last 200 entries)
+connection_logs = []
+connection_logs_lock = threading.Lock()
+MAX_LOG_ENTRIES = 200
+
+class ConnectionLogHandler(logging.Handler):
+    """Custom logging handler to capture logs for connection log display"""
+    def emit(self, record):
+        try:
+            log_entry = {
+                'timestamp': datetime.now().isoformat(),
+                'level': record.levelname,
+                'message': self.format(record),
+                'module': record.module,
+                'funcName': record.funcName,
+                'lineno': record.lineno
+            }
+            with connection_logs_lock:
+                connection_logs.append(log_entry)
+                # Keep only last MAX_LOG_ENTRIES
+                if len(connection_logs) > MAX_LOG_ENTRIES:
+                    connection_logs.pop(0)
+        except Exception:
+            pass  # Don't break logging if handler fails
+
+# Add custom handler to root logger (after basicConfig)
+log_handler = ConnectionLogHandler()
+log_handler.setLevel(logging.INFO)
+log_formatter = logging.Formatter('%(message)s')
+log_handler.setFormatter(log_formatter)
+# Get root logger and add handler
+root_logger = logging.getLogger()
+root_logger.addHandler(log_handler)
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint with detailed connection info"""
     ibkr_connected = IBKR_AVAILABLE and IBKR_CONNECTED and (IBKR_INSTANCE and IBKR_INSTANCE.isConnected() if IBKR_INSTANCE else False)
+    
+    # Get connection error details if disconnected
+    connection_error = None
+    if IBKR_AVAILABLE and not ibkr_connected:
+        try:
+            if IBKR_INSTANCE and not IBKR_INSTANCE.isConnected():
+                connection_error = "IBKR instance exists but not connected. Check TWS/IB Gateway is running and API is enabled."
+            elif not IBKR_INSTANCE:
+                connection_error = "IBKR instance not initialized. Check ib_insync is installed and TWS/IB Gateway is running."
+            else:
+                connection_error = "Connection status unknown. Check TWS/IB Gateway connection."
+        except Exception as e:
+            connection_error = f"Error checking connection: {str(e)}"
+    
     return jsonify({
         'status': 'healthy',
         'ibkrAvailable': IBKR_AVAILABLE,
@@ -2275,8 +2344,33 @@ def health_check():
         'ibkrHost': IBKR_HOST,
         'ibkrPort': IBKR_PORT,
         'ibkrUsername': IBKR_USERNAME,
+        'connectionError': connection_error,
         'timestamp': datetime.now().isoformat()
     })
+
+@app.route('/api/logs', methods=['GET'])
+def get_logs():
+    """Get recent connection logs for display in connection log panel"""
+    try:
+        with connection_logs_lock:
+            # Filter for relevant logs (IBKR, Scanner, API, Connection)
+            relevant_logs = []
+            for log in connection_logs[-100:]:  # Last 100 entries
+                message = log.get('message', '').lower()
+                if any(keyword in message for keyword in ['ibkr', 'scanner', 'connection', 'connect', 'error', 'failed', 'api', 'scan', 'stock']):
+                    relevant_logs.append(log)
+            
+            return jsonify({
+                'success': True,
+                'logs': relevant_logs[-50:],  # Return last 50 relevant logs
+                'count': len(relevant_logs)
+            })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'logs': []
+        }), 500
 
 if __name__ == '__main__':
     # Start news scheduler in background thread
