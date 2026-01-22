@@ -9,137 +9,24 @@ const API_BASE_URL = '/api'
 
 export const scanStocks = async (settings: ScannerSettings): Promise<ScanResult> => {
   try {
-    if (USE_RENDER_BACKEND) {
-      // Check rate limit (20s minimum between scans)
-      if (!canScanNow()) {
-        const waitTime = getTimeUntilNextScan()
-        const rateLimitError = new Error(`Rate limited - wait ${waitTime}s`)
-        ;(rateLimitError as any).isRateLimit = true
-        throw rateLimitError
-      }
+    // IBKR only mode - use local backend (no rate limits)
+    const response = await axios.post(`${API_BASE_URL}/scan`, settings)
+    return response.data
 
-      // Use Render backend - enforce 10 stock maximum
-      const symbols = settings.symbols || ['GME', 'AMC', 'TSLA', 'PLTR', 'SOFI', 'NIO', 'LCID', 'ATER', 'AMD', 'NVDA']
-      const limitedSymbols = symbols.slice(0, 10) // Yahoo Finance limit
-
-      console.log(`📡 Using Render backend (${limitedSymbols.length}/10 stocks, 20s interval)`)
-
-      const result = await renderScanStocks({
-        symbols: limitedSymbols,
-        minPrice: settings.minPrice,
-        maxPrice: settings.maxPrice,
-        maxFloat: settings.maxFloat,
-        minGainPercent: settings.minGainPercent,
-        volumeMultiplier: settings.volumeMultiplier,
-        useYahoo: settings.useYahoo,
-        useSerpAPI: settings.useSerpAPI,
-        useAlphaVantage: settings.useAlphaVantage,
-        useMassive: settings.useMassive,
-      })
-
-      markScanComplete() // Track last scan time
-
-      // Convert to ScanResult format
-      return {
-        success: true,
-        stocks: result.stocks.map(stock => ({
-          symbol: stock.symbol,
-          name: stock.name,
-          price: stock.price,
-          open: stock.open,
-          high: stock.high,
-          low: stock.low,
-          volume: stock.volume,
-          avgVolume: stock.avgVolume,
-          float: stock.float,
-          marketCap: stock.marketCap,
-          changePercent: stock.changePercent,
-          volumeMultiplier: stock.volume / (stock.avgVolume || 1),
-          signal: stock.changePercent > 5 ? 'BUY' : stock.changePercent < -5 ? 'SELL' : 'HOLD',
-          isHot: stock.changePercent > 10,
-          hasNews: false,
-          candles: stock.candles,
-          updatedAt: Date.now(),
-        })),
-        count: result.count,
-        apiStatus: {
-          activeSource: 'Render Backend (Yahoo Finance)',
-          fallbackAvailable: false,
-          massiveRateLimit: null,
-        }
-      }
-    } else {
-      // Use local Python backend (fallback)
-      const response = await axios.post(`${API_BASE_URL}/scan`, settings)
-      return response.data
-    }
   } catch (error: any) {
     console.error('Error scanning stocks:', error)
-    
-    // Check if it's a 429 rate limit error - lock the API for 24 hours
-    if (error.response?.status === 429 || error.response?.data?.rateLimited || error.message?.includes('wait')) {
-      // Determine which API was used and lock it
-      const errorMessage = error?.message || ''
-      const responseData = error?.response?.data || {}
-      
-      // Check error message or response data for API name
-      if (errorMessage.includes('Yahoo') || errorMessage.includes('yahoo') || responseData.source?.includes('Yahoo')) {
-        lockApi('yahoo')
-      } else if (errorMessage.includes('SerpAPI') || errorMessage.includes('serpapi') || responseData.source?.includes('SerpAPI')) {
-        lockApi('serpapi')
-      } else if (errorMessage.includes('AlphaVantage') || errorMessage.includes('alphavantage') || responseData.source?.includes('AlphaVantage')) {
-        lockApi('alphavantage')
-      } else if (errorMessage.includes('Massive') || errorMessage.includes('massive') || errorMessage.includes('Polygon') || responseData.source?.includes('Massive')) {
-        lockApi('massive')
-      } else {
-        // Default: lock Yahoo if using Render backend (most common)
-        if (USE_RENDER_BACKEND) {
-          lockApi('yahoo')
-        }
-      }
-      
-      const rateLimitError = new Error(error.message || '429 Too Many Requests - Rate Limited')
-      ;(rateLimitError as any).isRateLimit = true
-      throw rateLimitError
-    }
-    
+    // IBKR only mode - no rate limit handling needed
     throw error
   }
 }
 
 export const getStock = async (symbol: string, timeframe: string): Promise<Stock> => {
   try {
-    if (USE_RENDER_BACKEND) {
-      // Use Render backend for individual stock quotes
-      console.log(`📊 Fetching ${symbol} (${timeframe}) via Render backend...`)
-      const stock = await getStockQuote(symbol, timeframe as any)
-      
-      return {
-        symbol: stock.symbol,
-        name: stock.name,
-        price: stock.price,
-        open: stock.open,
-        high: stock.high,
-        low: stock.low,
-        volume: stock.volume,
-        avgVolume: stock.avgVolume,
-        float: stock.float,
-        marketCap: stock.marketCap,
-        changePercent: stock.changePercent,
-        volumeMultiplier: stock.volume / (stock.avgVolume || 1),
-        signal: stock.changePercent > 5 ? 'BUY' : stock.changePercent < -5 ? 'SELL' : 'HOLD',
-        isHot: stock.changePercent > 10,
-        hasNews: false,
-        candles: stock.candles,
-        updatedAt: Date.now(),
-      }
-    } else {
-      // Use local Python backend
-      const response = await axios.get(`${API_BASE_URL}/stock/${symbol}`, {
-        params: { timeframe }
-      })
-      return response.data.stock
-    }
+    // IBKR only mode - use local backend
+    const response = await axios.get(`${API_BASE_URL}/stock/${symbol}`, {
+      params: { timeframe }
+    })
+    return response.data.stock
   } catch (error) {
     console.error(`Error fetching stock ${symbol}:`, error)
     throw error
