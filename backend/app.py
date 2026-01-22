@@ -1110,11 +1110,33 @@ class StockScanner:
         if float_shares is None:
             float_shares = 1_000_000_000
             
+        # Always fetch 24h data for AI study (regardless of requested timeframe)
+        candles_24h = []
+        if timeframe != '24h':
+            try:
+                logging.info(f"📊 Fetching 24h data for {symbol} (AI study)...")
+                hist_24h = ticker.history(period='1d', interval='1h')
+                if not hist_24h.empty and len(hist_24h) > 0:
+                    for idx, row in hist_24h.iterrows():
+                        candles_24h.append({
+                            'time': idx.isoformat(),
+                            'open': round(float(row['Open']), 2),
+                            'high': round(float(row['High']), 2),
+                            'low': round(float(row['Low']), 2),
+                            'close': round(float(row['Close']), 2),
+                            'volume': int(row['Volume'])
+                        })
+                    logging.info(f"✅ Fetched {len(candles_24h)} candles of 24h data for {symbol}")
+            except Exception as e:
+                logging.warning(f"⚠️ Could not fetch 24h data for {symbol}: {e}")
+        
         # Prepare chart data with 24h data included
         chart_data = {timeframe: candles}
-        if timeframe != '24h' and 'candles_24h' in locals() and candles_24h:
+        if candles_24h:
             chart_data['24h'] = candles_24h
             logging.info(f"✅ Added 24h data to chartData for {symbol} ({len(candles_24h)} candles)")
+        elif timeframe == '24h':
+            chart_data['24h'] = candles
         
         # Calculate moving averages
         closes = hist['Close']
