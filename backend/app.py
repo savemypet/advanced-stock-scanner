@@ -923,13 +923,24 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
             logging.warning(f"⚠️ Empty DataFrame from IBKR for {symbol}")
             return None
         
-        # Get current quote
+        # Get current quote with bid/ask data
         IBKR_INSTANCE.reqMktData(contract, '', False, False)
         ticker = IBKR_INSTANCE.ticker(contract)
         IBKR_INSTANCE.sleep(1)  # Wait for data
         
         current_price = float(ticker.last) if ticker.last else float(df['close'].iloc[-1])
         previous_close = float(df['close'].iloc[0]) if len(df) > 0 else current_price
+        
+        # Get bid/ask spread data (if available)
+        bid_price = float(ticker.bid) if ticker.bid else None
+        ask_price = float(ticker.ask) if ticker.ask else None
+        spread = (ask_price - bid_price) if (bid_price and ask_price) else None
+        spread_percent = (spread / bid_price * 100) if (bid_price and spread and bid_price > 0) else None
+        
+        # Get real-time volume (current day)
+        current_volume = int(ticker.volume) if ticker.volume else None
+        day_high = float(ticker.high) if ticker.high else float(df['high'].max()) if len(df) > 0 else current_price
+        day_low = float(ticker.low) if ticker.low else float(df['low'].min()) if len(df) > 0 else current_price
         
         # Convert to candles format
         candles = []
@@ -1003,10 +1014,15 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
             'currentPrice': round(current_price, 2),
             'previousClose': round(previous_close, 2),
             'openPrice': round(float(df['open'].iloc[-1]), 2) if len(df) > 0 else round(current_price, 2),
-            'dayHigh': round(float(df['high'].max()), 2),
-            'dayLow': round(float(df['low'].min()), 2),
+            'dayHigh': round(day_high, 2),
+            'dayLow': round(day_low, 2),
             'volume': int(df['volume'].sum()) if len(df) > 0 else 0,
+            'currentVolume': current_volume,  # Real-time volume from ticker
             'avgVolume': int(df['volume'].mean()) if len(df) > 0 else 0,
+            'bidPrice': round(bid_price, 2) if bid_price else None,
+            'askPrice': round(ask_price, 2) if ask_price else None,
+            'spread': round(spread, 2) if spread else None,
+            'spreadPercent': round(spread_percent, 2) if spread_percent else None,
             'changeAmount': round(change_amount, 2),
             'changePercent': round(change_percent, 2),
             'float': 0,  # IBKR doesn't provide float directly
@@ -1018,7 +1034,8 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
             'dataSource': 'Interactive Brokers',
             'source': f'Interactive Brokers ({timeframe} - {len(candles)} candles, 24h data included)',
             'isRealData': True,
-            'marketStatus': 'OPEN' if market_open else 'CLOSED'
+            'marketStatus': 'OPEN' if market_open else 'CLOSED',
+            'hasBidAsk': bid_price is not None and ask_price is not None  # Indicates real-time data available
         }
         
         logging.info(f"✅ Successfully fetched {symbol} from Interactive Brokers: ${current_price} ({change_percent:+.2f}%) - {len(candles)} candles, 24h data: {len(chart_data.get('24h', []))} candles")
