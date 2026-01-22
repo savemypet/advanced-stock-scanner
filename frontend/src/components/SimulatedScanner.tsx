@@ -15,20 +15,18 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
   const [isLiveMode, setIsLiveMode] = useState(true)
   const [isLoading, setIsLoading] = useState(true)
 
-  // Fetch today's discovered stocks from backend with REAL charts and pattern labels
+  // Fetch ONLY stocks discovered by the scanner (AI learning from scanner picks only)
   useEffect(() => {
     const fetchDailyStocks = async () => {
       try {
-        console.log(`🤖 Fetching stocks for AI analysis...`)
-        // Try to fetch real market movers first, then preloaded stocks, then daily-discovered
-        let response = await fetch('http://localhost:5000/api/market-movers?type=gainers')
+        console.log(`🤖 Fetching stocks for AI analysis - ONLY from scanner results...`)
+        // AI ONLY uses stocks that the scanner picked up - no independent scanning
+        const response = await fetch('http://localhost:5000/api/daily-discovered')
         if (!response.ok) {
-          // Fallback to preloaded stocks (works even when market is closed)
-          response = await fetch('http://localhost:5000/api/preload-stocks')
-          if (!response.ok) {
-            // Final fallback to daily-discovered
-            response = await fetch('http://localhost:5000/api/daily-discovered')
-          }
+          console.log('⚠️ No stocks discovered by scanner yet - run a scan first')
+          setSimulatedStocks([])
+          setIsLoading(false)
+          return
         }
         const data = await response.json()
         

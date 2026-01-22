@@ -1650,8 +1650,9 @@ def scan_stocks():
                     stock['has24hData'] = '24h' in stock.get('chartData', {}) and len(stock.get('chartData', {}).get('24h', [])) > 0
                     
                     # Store the stock with 24h data for AI study
+                    # AI ONLY learns from stocks that pass scanner filters
                     daily_discovered_stocks.append(stock)
-                    logging.info(f"📊 Added {stock['symbol']} to today's discovered stocks with 24h data for AI study (total: {len(daily_discovered_stocks)})")
+                    logging.info(f"📊 Added {stock['symbol']} to today's discovered stocks for AI learning (scanner pick only, total: {len(daily_discovered_stocks)})")
         
         # IBKR ONLY MODE - API Status
         ibkr_connected = IBKR_AVAILABLE and IBKR_CONNECTED and (IBKR_INSTANCE and IBKR_INSTANCE.isConnected() if IBKR_INSTANCE else False)
@@ -1973,73 +1974,35 @@ def get_proxy_status():
 
 @app.route('/api/preload-stocks', methods=['GET'])
 def preload_stocks():
-    """Preload popular stocks with historical data for AI trend analysis (works even when market is closed)"""
-    try:
-        # Popular stocks for AI to analyze trends
-        popular_symbols = [
-            'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA', 'AMD', 'NFLX', 'INTC',
-            'GME', 'AMC', 'PLTR', 'SOFI', 'NIO', 'LCID', 'SPY', 'QQQ', 'ARKK', 'TQQQ',
-            'SPCE', 'RBLX', 'HOOD', 'COIN', 'RIVN', 'F', 'GM', 'BAC', 'JPM', 'WMT'
-        ]
+    """Preload stocks - ONLY from scanner results (AI does not scan independently)"""
+    # AI learning ONLY uses stocks from scanner - redirect to daily-discovered
+    logging.info(f"📊 Preload stocks requested - returning ONLY scanner-discovered stocks (AI does not scan independently)")
+    
+    with daily_discovered_lock:
+        today = datetime.now().date()
         
-        if not IBKR_AVAILABLE:
+        if daily_discovered_date != today or not daily_discovered_stocks:
             return jsonify({
-                'success': False,
-                'error': 'Interactive Brokers API not available. Install ib-insync: pip install ib-insync'
-            }), 500
+                'success': True,
+                'stocks': [],
+                'count': 0,
+                'source': 'Scanner Results Only',
+                'marketStatus': 'CLOSED' if not is_market_open() else 'OPEN',
+                'note': 'No stocks discovered by scanner yet. Run a scan first. AI only learns from scanner picks.',
+                'message': 'AI learning only uses stocks discovered by scanner - no independent scanning'
+            })
         
-        if not connect_ibkr():
-            return jsonify({
-                'success': False,
-                'error': f'Cannot connect to Interactive Brokers. Make sure TWS/IB Gateway is running and logged in as {IBKR_USERNAME}'
-            }), 503
-        
-        preloaded_stocks = []
-        
-        for symbol in popular_symbols:
-            try:
-                logging.info(f"📊 Preloading {symbol} with historical data for AI analysis...")
-                # Fetch 24h data (includes yesterday) for trend analysis
-                stock_data = fetch_from_ibkr(symbol, '24h')
-                if stock_data:
-                    # Also fetch 5m for detailed view
-                    if '5m' not in stock_data.get('chartData', {}):
-                        stock_5m = fetch_from_ibkr(symbol, '5m')
-                        if stock_5m and stock_5m.get('candles'):
-                            stock_data['chartData']['5m'] = stock_5m['candles']
-                    
-                    # Ensure 24h data is in chartData
-                    if '24h' not in stock_data.get('chartData', {}):
-                        stock_data['chartData']['24h'] = stock_data.get('candles', [])
-                    
-                    stock_data['has24hData'] = len(stock_data.get('chartData', {}).get('24h', [])) > 0
-                    stock_data['has5mData'] = len(stock_data.get('chartData', {}).get('5m', [])) > 0
-                    stock_data['preloaded'] = True
-                    stock_data['source'] = 'Interactive Brokers - Preloaded for AI Analysis'
-                    
-                    preloaded_stocks.append(stock_data)
-                    logging.info(f"✅ Preloaded {symbol} - {len(stock_data.get('candles', []))} candles")
-            except Exception as e:
-                logging.warning(f"⚠️ Could not preload {symbol}: {e}")
-                continue
-        
-        logging.info(f"✅ Preloaded {len(preloaded_stocks)} stocks for AI trend analysis")
+        logging.info(f"✅ Returning {len(daily_discovered_stocks)} stocks from scanner results (AI only learns from scanner picks)")
         
         return jsonify({
             'success': True,
-            'stocks': preloaded_stocks,
-            'count': len(preloaded_stocks),
-            'source': 'Interactive Brokers - Preloaded Historical Data',
+            'stocks': daily_discovered_stocks,
+            'count': len(daily_discovered_stocks),
+            'source': 'Scanner Results Only',
             'marketStatus': 'CLOSED' if not is_market_open() else 'OPEN',
-            'note': 'These stocks are preloaded with historical data for AI trend analysis, available even when market is closed'
+            'note': 'AI learning only uses stocks discovered by scanner - no independent scanning',
+            'date': daily_discovered_date.isoformat()
         })
-        
-    except Exception as e:
-        logging.error(f"❌ Error in preload_stocks: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
