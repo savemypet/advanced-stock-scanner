@@ -816,6 +816,25 @@ def connect_ibkr():
             IBKR_CONNECTED = False
             return False
 
+def get_scanner_delay() -> int:
+    """Get current scanner delay (auto-adjusted based on errors)"""
+    global SCANNER_DELAY
+    with SCANNER_DELAY_LOCK:
+        return SCANNER_DELAY
+
+def _adjust_delay_on_error(error_type: str):
+    """Automatically increase scanner delay by 1 second on errors (max 60s)"""
+    global SCANNER_DELAY, LAST_ERROR_TIME, ERROR_COUNT
+    with SCANNER_DELAY_LOCK:
+        ERROR_COUNT += 1
+        LAST_ERROR_TIME = datetime.now()
+        
+        if SCANNER_DELAY < 60:  # Max 60 seconds
+            SCANNER_DELAY += 1
+            logging.info(f"⏱️ Auto-adjusted scanner delay to {SCANNER_DELAY}s (error: {error_type}, total errors: {ERROR_COUNT})")
+        else:
+            logging.warning(f"⚠️ Scanner delay at maximum (60s) - error: {error_type}")
+
 def is_market_open() -> bool:
     """Check if US stock market is currently open (9:30 AM - 4:00 PM ET, Mon-Fri)"""
     from datetime import datetime, time
