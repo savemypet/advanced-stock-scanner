@@ -1011,47 +1011,43 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
         # Fetch IBKR news for this stock
         ibkr_news = []
         try:
-            logging.info(f"📰 Fetching IBKR news for {symbol}...")
-            news_headlines = IBKR_INSTANCE.reqNewsHeadlines(
-                contract.conId if hasattr(contract, 'conId') else None,
-                '',
-                ''
-            )
-            IBKR_INSTANCE.sleep(0.5)  # Wait for news data
-            
-            if news_headlines:
-                for headline in news_headlines[:5]:  # Limit to 5 most recent
-                    # Get full news article
-                    try:
-                        news_article = IBKR_INSTANCE.reqNewsArticle(
-                            headline.providerCode,
-                            headline.articleId,
-                            ''
-                        )
-                        IBKR_INSTANCE.sleep(0.2)
-                        
-                        ibkr_news.append({
-                            'title': headline.headline if hasattr(headline, 'headline') else '',
-                            'time': headline.time.isoformat() if hasattr(headline, 'time') and headline.time else datetime.now().isoformat(),
-                            'provider': headline.providerCode if hasattr(headline, 'providerCode') else 'IBKR',
-                            'articleId': headline.articleId if hasattr(headline, 'articleId') else '',
-                            'source': 'Interactive Brokers',
-                            'url': f"https://www.interactivebrokers.com/en/index.php?f=news&id={headline.articleId}" if hasattr(headline, 'articleId') else None
-                        })
-                    except Exception as e:
-                        # If article fetch fails, still include headline
-                        ibkr_news.append({
-                            'title': headline.headline if hasattr(headline, 'headline') else '',
-                            'time': headline.time.isoformat() if hasattr(headline, 'time') and headline.time else datetime.now().isoformat(),
-                            'provider': headline.providerCode if hasattr(headline, 'providerCode') else 'IBKR',
-                            'source': 'Interactive Brokers',
-                            'url': None
-                        })
-                        logging.debug(f"Could not fetch full article for {symbol}: {e}")
+            # Get contract details first to get conId
+            if contract_details and len(contract_details) > 0:
+                con_id = contract_details[0].contract.conId
+                logging.info(f"📰 Fetching IBKR news for {symbol} (conId: {con_id})...")
                 
-                logging.info(f"✅ Found {len(ibkr_news)} IBKR news items for {symbol}")
+                # Request news headlines
+                news_headlines = IBKR_INSTANCE.reqNewsHeadlines(
+                    con_id,
+                    '',
+                    ''
+                )
+                IBKR_INSTANCE.sleep(0.5)  # Wait for news data
+                
+                if news_headlines and len(news_headlines) > 0:
+                    for headline in news_headlines[:5]:  # Limit to 5 most recent
+                        try:
+                            # Format news item
+                            news_item = {
+                                'title': headline.headline if hasattr(headline, 'headline') else '',
+                                'time': headline.time.isoformat() if hasattr(headline, 'time') and headline.time else datetime.now().isoformat(),
+                                'provider': headline.providerCode if hasattr(headline, 'providerCode') else 'IBKR',
+                                'articleId': headline.articleId if hasattr(headline, 'articleId') else '',
+                                'source': 'Interactive Brokers',
+                                'url': f"https://www.interactivebrokers.com/en/index.php?f=news&id={headline.articleId}" if hasattr(headline, 'articleId') else None
+                            }
+                            ibkr_news.append(news_item)
+                        except Exception as e:
+                            logging.debug(f"Error formatting news headline for {symbol}: {e}")
+                            continue
+                    
+                    logging.info(f"✅ Found {len(ibkr_news)} IBKR news items for {symbol}")
+                else:
+                    logging.debug(f"ℹ️ No IBKR news headlines found for {symbol}")
+            else:
+                logging.debug(f"ℹ️ Could not get contract details for {symbol} - skipping IBKR news")
         except Exception as e:
-            logging.warning(f"⚠️ Could not fetch IBKR news for {symbol}: {e}")
+            logging.debug(f"⚠️ Could not fetch IBKR news for {symbol}: {e}")
             # IBKR news is optional, continue without it
         
         stock_data = {
@@ -1442,6 +1438,7 @@ class StockScanner:
                 stock_data['hasNews'] = len(all_news) > 0
                 stock_data['newsCount'] = len(all_news)
                 stock_data['allNews'] = all_news  # Combine IBKR + external news
+                stock_data['ibkrNewsCount'] = len(ibkr_news)  # Track IBKR news separately
                 
                 # Ensure chartData has current timeframe
                 if timeframe not in stock_data['chartData']:
