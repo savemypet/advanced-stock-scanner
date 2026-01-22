@@ -488,8 +488,8 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
                 placeholder="e.g., 10M or 10000000"
               />
               <PresetStatusBadge 
-                status="good" 
-                message="Float data from Yahoo Finance (supplemented with IBKR data)"
+                status={getPresetStatus(localSettings).float} 
+                message={getPresetStatus(localSettings).float === 'good' ? "Float data from Massive.com (if available)" : "Float data from Massive.com only - may not be available for all stocks"}
               />
             </div>
             <InputField

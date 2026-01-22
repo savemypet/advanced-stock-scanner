@@ -1115,12 +1115,12 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
             chart_data['24h'] = candles
             candles_24h = candles
         
-        # Fetch float data from Yahoo Finance or Massive.com (IBKR doesn't provide float)
-        # Try Massive.com first (faster), then Yahoo Finance as fallback
+        # Fetch float data from Massive.com only (IBKR doesn't provide float, Yahoo Finance not used)
+        # Only use Massive.com if available and scan times are okay
         float_shares = 0
         float_source = None
         
-        # Try Massive.com first (if available and scan times are okay)
+        # Try Massive.com (if available and rate limit allows)
         try:
             if MASSIVE_KEY != 'YOUR_MASSIVE_API_KEY' and should_use_massive():
                 logging.debug(f"📊 Fetching float data from Massive.com for {symbol}...")
@@ -1138,22 +1138,7 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
                             track_massive_usage()  # Track usage
         except Exception as e:
             logging.debug(f"⚠️ Could not fetch float data from Massive.com for {symbol}: {e}")
-        
-        # Fallback to Yahoo Finance if Massive.com didn't work
-        if float_shares == 0 or float_source is None:
-            try:
-                logging.debug(f"📊 Fetching float data from Yahoo Finance for {symbol}...")
-                ticker = yf.Ticker(symbol)
-                info = ticker.info
-                float_shares = info.get('floatShares', info.get('sharesOutstanding', 0))
-                if float_shares is None:
-                    float_shares = 0
-                if float_shares > 0:
-                    logging.info(f"✅ Got float data for {symbol}: {float_shares:,} shares from Yahoo Finance")
-                    float_source = 'Yahoo Finance'
-            except Exception as e:
-                logging.debug(f"⚠️ Could not fetch float data from Yahoo Finance for {symbol}: {e}")
-                float_shares = 0
+            float_shares = 0
         
         # Fetch IBKR news for this stock
         ibkr_news = []
@@ -1214,8 +1199,8 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
             'spreadPercent': round(spread_percent, 2) if spread_percent else None,
             'changeAmount': round(change_amount, 2),
             'changePercent': round(change_percent, 2),
-            'float': int(float_shares) if float_shares and float_shares > 0 else 0,  # From Massive.com or Yahoo Finance (IBKR doesn't provide)
-            'floatSource': float_source if float_source else None,  # Track which source provided float
+            'float': int(float_shares) if float_shares and float_shares > 0 else 0,  # From Massive.com only (IBKR doesn't provide)
+            'floatSource': float_source if float_source else None,  # Track which source provided float (Massive.com or None)
             'marketCap': 0,  # Calculate if needed
             'candles': candles,
             'chartData': chart_data,  # Always includes 24h data
