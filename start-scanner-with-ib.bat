@@ -1,7 +1,7 @@
 @echo off
 echo ========================================
 echo   Advanced Stock Scanner
-echo   Windows Launcher
+echo   Windows Launcher (with IB Gateway)
 echo ========================================
 echo.
 
@@ -121,21 +121,27 @@ pause
 
 :start_backend
 echo.
+echo ========================================
 echo Starting backend server...
+echo ========================================
 start "Backend Server - Advanced Stock Scanner" cmd /k "cd /d %~dp0backend && python app.py"
 timeout /t 3 /nobreak > nul
 
+echo.
+echo ========================================
 echo Starting frontend development server...
+echo ========================================
 start "Frontend Server - Advanced Stock Scanner" cmd /k "cd /d %~dp0frontend && npm run dev"
 
 echo.
 echo ========================================
-echo Both servers are starting...
+echo All servers are starting...
 echo.
-echo Backend:  http://localhost:5000
-echo Frontend: http://localhost:3000 (or check terminal for actual port)
+echo IB Gateway:  Check the IB Gateway window (should be running)
+echo Backend:     http://localhost:5000
+echo Frontend:    http://localhost:3000 (or check terminal for actual port)
 echo.
-echo Two windows will open - keep them open!
+echo Three windows will open - keep them open!
 echo Close them to stop the servers.
 echo ========================================
 echo.

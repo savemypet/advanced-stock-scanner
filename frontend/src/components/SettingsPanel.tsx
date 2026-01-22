@@ -365,15 +365,15 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
   const handleReset = () => {
     const defaultSettings: ScannerSettings = {
       minPrice: 1,
-      maxPrice: 20,
+      maxPrice: 6,
       maxFloat: 10_000_000, // 10M shares - LOW-FLOAT for volatile stocks
       minGainPercent: 10, // 10% - only explosive movers
-      volumeMultiplier: 5, // 5x - EXPLOSIVE volume only
+      volumeMultiplier: 4, // 4x - EXPLOSIVE volume only
       displayCount: 10, // Show all 10 tracked symbols
       chartTimeframe: '5m',
       autoAdd: true,
       realTimeUpdates: true,
-      updateInterval: 20, // 20 seconds - fastest safe with 10 symbols
+      updateInterval: 12, // 12 seconds - update interval
       notificationsEnabled: true,
       notifyOnNewStocks: true,
       useYahoo: localSettings.useYahoo ?? true,
@@ -632,7 +632,8 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
           </div>
         </section>
 
-        {/* API Selection */}
+        {/* API Selection - HIDDEN: IBKR-only mode, no API selection needed */}
+        {false && (
         <section>
           <h3 className="flex items-center gap-2 text-sm font-semibold mb-3">
             <Globe className="w-4 h-4" />
@@ -852,6 +853,7 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
             )}
           </div>
         </section>
+        )}
 
         {/* Presets */}
         <section>

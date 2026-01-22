@@ -31,15 +31,15 @@ function App() {
   
   const [settings, setSettings] = useState<ScannerSettings>({
     minPrice: 1,
-    maxPrice: 200,
-    maxFloat: 500_000_000, // 500M shares - moderate float for better stock discovery
-    minGainPercent: 2, // 2% - reasonable daily gain (shows more stocks)
-    volumeMultiplier: 1.5, // 1.5x - moderate volume filter (shows more stocks)
-    displayCount: 5, // Show 5 stocks (matches Massive.com's 5 calls/min limit)
+    maxPrice: 6,
+    maxFloat: 10_000_000, // 10M shares - low float for volatile stocks
+    minGainPercent: 10, // 10% - only explosive movers
+    volumeMultiplier: 4, // 4x - EXPLOSIVE volume only
+    displayCount: 10, // Show 10 stocks
     chartTimeframe: '5m',
     autoAdd: true,
     realTimeUpdates: true, // AUTO-SCAN ENABLED - dynamically adjusts to API availability
-    updateInterval: 20, // SMART: 20s with Yahoo/SerpAPI/AlphaVantage, auto-adjusts to 60s when only Massive.com available
+    updateInterval: 12, // 12 seconds - update interval
     notificationsEnabled: true,
     notifyOnNewStocks: true,
     // API Selection - Default: Yahoo only (most reliable)
@@ -53,8 +53,7 @@ function App() {
   useEffect(() => {
     // Clear any old rate limit state (from previous API modes)
     localStorage.removeItem('rateLimitedUntil')
-    setRateLimited(false)
-    setReadyTime(null)
+    // Removed setRateLimited and setReadyTime - no longer needed in IBKR-only mode
   }, [])
 
   const performScan = useCallback(async () => {
@@ -102,8 +101,7 @@ function App() {
         })
         
         // IBKR only mode - no rate limits, always clear any rate limit state
-        setRateLimited(false)
-        setReadyTime(null)
+        // IBKR only mode - no rate limits, removed rate limit state
         localStorage.removeItem('rateLimitedUntil')
         
         // Check for new stocks (silent - no popups)
@@ -136,7 +134,7 @@ function App() {
     } finally {
       setIsLoading(false)
     }
-  }, [settings, rateLimited, readyCountdown])
+  }, [settings])
 
   // Don't auto-scan on mount - wait for user to start
   // User must click Start/Play, Refresh, or apply preset/settings
@@ -322,13 +320,11 @@ function App() {
                 {/* Refresh Button */}
                 <button
                   onClick={handleRefresh}
-                  disabled={(rateLimited && readyCountdown > 0) || refreshCooldown > 0}
+                  disabled={refreshCooldown > 0}
                   className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   aria-label="Refresh"
                   title={
-                    rateLimited && readyCountdown > 0
-                      ? `🔒 Rate Limited - Wait ${Math.floor(readyCountdown / 60)}:${(readyCountdown % 60).toString().padStart(2, '0')}`
-                      : refreshCooldown > 0
+                    refreshCooldown > 0
                       ? `⏳ Cooldown: ${refreshCooldown}s`
                       : isLoading
                       ? 'Scanning...'

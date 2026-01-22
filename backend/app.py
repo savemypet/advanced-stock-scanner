@@ -24,7 +24,7 @@ except ImportError:
 
 # IBKR Connection Settings
 IBKR_HOST = os.getenv('IBKR_HOST', '127.0.0.1')
-IBKR_PORT = int(os.getenv('IBKR_PORT', '7497'))  # 7497 = paper trading, 7496 = live
+IBKR_PORT = int(os.getenv('IBKR_PORT', '4001'))  # 4001 = default IB Gateway port, 7497 = paper trading, 7496 = live
 IBKR_CLIENT_ID = int(os.getenv('IBKR_CLIENT_ID', '1'))
 IBKR_USERNAME = os.getenv('IBKR_USERNAME', 'userconti')
 IBKR_PASSWORD = os.getenv('IBKR_PASSWORD', 'mbnadc21234')
@@ -800,6 +800,8 @@ def connect_ibkr():
         try:
             if IBKR_INSTANCE is None:
                 IBKR_INSTANCE = IB()
+                # Start the event loop for ib_insync (required for async operations)
+                util.startLoop()
             
             if not IBKR_INSTANCE.isConnected():
                 logging.info(f"🔌 Connecting to Interactive Brokers at {IBKR_HOST}:{IBKR_PORT}...")
@@ -813,6 +815,7 @@ def connect_ibkr():
         except Exception as e:
             logging.warning(f"⚠️ Could not connect to Interactive Brokers: {e}")
             logging.info("💡 Make sure TWS or IB Gateway is running and API is enabled")
+            logging.info("💡 Also check: Configure > API > Settings > Enable ActiveX and Socket Clients")
             IBKR_CONNECTED = False
             return False
 
@@ -1253,10 +1256,10 @@ class StockScanner:
         # Note: symbols are now managed globally in active_symbols (auto-expands)
         self.symbols = SEED_SYMBOLS  # Not used anymore, kept for compatibility
         self.min_price = 1.0
-        self.max_price = 20.0
-        self.max_float = 1_000_000_000  # 1B shares
+        self.max_price = 6.0
+        self.max_float = 10_000_000  # 10M shares
         self.min_gain_percent = 10.0
-        self.volume_multiplier = 2.0
+        self.volume_multiplier = 4.0
         
     def get_stock_data(self, symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
         """
