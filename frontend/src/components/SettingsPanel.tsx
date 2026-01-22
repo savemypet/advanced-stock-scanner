@@ -1,7 +1,71 @@
 import { useState, useEffect } from 'react'
 import { ScannerSettings, ChartTimeframe } from '../types'
-import { X, DollarSign, TrendingUp, BarChart3, Bell, Clock, Hash, HelpCircle, Globe } from 'lucide-react'
+import { X, DollarSign, TrendingUp, BarChart3, Bell, Clock, Hash, HelpCircle, Globe, CheckCircle, XCircle, AlertTriangle } from 'lucide-react'
 import FAQSection from './FAQSection'
+
+// Helper function to check preset status
+function getPresetStatus(settings: ScannerSettings): {
+  float: 'good' | 'wont-work' | 'ok'
+  gain: 'good' | 'wont-work' | 'ok'
+  volume: 'good' | 'wont-work' | 'ok'
+  displayCount: 'good' | 'wont-work' | 'ok'
+  timeframe: 'good' | 'wont-work' | 'ok'
+  priceRange: 'good' | 'wont-work' | 'ok'
+} {
+  return {
+    // Float filter - IBKR doesn't provide, so it won't work
+    float: 'wont-work',
+    
+    // Gain filter - Good if 5%+, OK if 3-5%, Won't work if negative
+    gain: settings.minGainPercent < 0 ? 'wont-work' : 
+          settings.minGainPercent >= 5 ? 'good' : 
+          settings.minGainPercent >= 3 ? 'ok' : 'ok',
+    
+    // Volume multiplier - Good if 2x+, OK if 1.5-2x, Won't work if < 1x
+    volume: settings.volumeMultiplier < 1 ? 'wont-work' :
+            settings.volumeMultiplier >= 2 ? 'good' :
+            settings.volumeMultiplier >= 1.5 ? 'ok' : 'ok',
+    
+    // Display count - Good if 5-10, OK if 10-20, Won't work if > 20
+    displayCount: settings.displayCount > 20 ? 'wont-work' :
+                   settings.displayCount >= 5 && settings.displayCount <= 10 ? 'good' :
+                   settings.displayCount > 10 && settings.displayCount <= 20 ? 'ok' : 'ok',
+    
+    // Timeframe - Good if 5m+, OK if 1m-3m, Won't work if invalid
+    timeframe: ['1m', '2m'].includes(settings.chartTimeframe) ? 'ok' :
+               ['5m', '15m', '30m', '1h', '24h'].includes(settings.chartTimeframe) ? 'good' : 'ok',
+    
+    // Price range - Good if reasonable ($1-$50), OK if wider, Won't work if too wide
+    priceRange: (settings.maxPrice - settings.minPrice) > 1000 ? 'wont-work' :
+                settings.minPrice >= 1 && settings.maxPrice <= 50 ? 'good' :
+                settings.minPrice >= 0.05 && settings.maxPrice <= 100 ? 'ok' : 'ok'
+  }
+}
+
+function PresetStatusBadge({ status, message }: { status: 'good' | 'wont-work' | 'ok', message: string }) {
+  if (status === 'good') {
+    return (
+      <div className="flex items-center gap-1 text-xs text-green-500 mt-1">
+        <CheckCircle className="w-3 h-3" />
+        <span>{message}</span>
+      </div>
+    )
+  } else if (status === 'wont-work') {
+    return (
+      <div className="flex items-center gap-1 text-xs text-red-500 mt-1">
+        <XCircle className="w-3 h-3" />
+        <span>{message}</span>
+      </div>
+    )
+  } else {
+    return (
+      <div className="flex items-center gap-1 text-xs text-yellow-500 mt-1">
+        <AlertTriangle className="w-3 h-3" />
+        <span>{message}</span>
+      </div>
+    )
+  }
+}
 
 interface SettingsPanelProps {
   settings: ScannerSettings
@@ -377,20 +441,33 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
             Price Range
           </h3>
           <div className="space-y-3">
-            <InputField
-              label="Minimum Price"
-              type="number"
-              value={localSettings.minPrice}
-              onChange={(v) => handleChange('minPrice', parseFloat(v) || 0)}
-              prefix="$"
-            />
-            <InputField
-              label="Maximum Price"
-              type="number"
-              value={localSettings.maxPrice}
-              onChange={(v) => handleChange('maxPrice', parseFloat(v) || 0)}
-              prefix="$"
-            />
+            <div>
+              <InputField
+                label="Minimum Price"
+                type="number"
+                value={localSettings.minPrice}
+                onChange={(v) => handleChange('minPrice', parseFloat(v) || 0)}
+                prefix="$"
+              />
+            </div>
+            <div>
+              <InputField
+                label="Maximum Price"
+                type="number"
+                value={localSettings.maxPrice}
+                onChange={(v) => handleChange('maxPrice', parseFloat(v) || 0)}
+                prefix="$"
+              />
+            </div>
+            {getPresetStatus(localSettings).priceRange === 'good' && (
+              <PresetStatusBadge status="good" message="Good: Reasonable price range ($1-$50), won't hit rate limits" />
+            )}
+            {getPresetStatus(localSettings).priceRange === 'ok' && (
+              <PresetStatusBadge status="ok" message="Okay: Wide range may find many stocks, monitor rate limits" />
+            )}
+            {getPresetStatus(localSettings).priceRange === 'wont-work' && (
+              <PresetStatusBadge status="wont-work" message="Won't work: Range > $1000 will find too many stocks, rate limit risk" />
+            )}
           </div>
         </section>
 
@@ -401,14 +478,20 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
             Stock Criteria
           </h3>
           <div className="space-y-3">
-            <InputField
-              label="Max Float (shares)"
-              type="text"
-              value={floatDisplayValue}
-              onChange={handleFloatChange}
-              helperText="Use M for millions, K for thousands (e.g., 10M, 500K)"
-              placeholder="e.g., 10M or 10000000"
-            />
+            <div>
+              <InputField
+                label="Max Float (shares)"
+                type="text"
+                value={floatDisplayValue}
+                onChange={handleFloatChange}
+                helperText="Use M for millions, K for thousands (e.g., 10M, 500K)"
+                placeholder="e.g., 10M or 10000000"
+              />
+              <PresetStatusBadge 
+                status={getPresetStatus(localSettings).float} 
+                message="IBKR doesn't provide float data - this filter won't work"
+              />
+            </div>
             <InputField
               label="Minimum Gain %"
               type="number"
@@ -416,15 +499,26 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
               onChange={(v) => handleChange('minGainPercent', parseFloat(v) || 0)}
               suffix="%"
             />
-            <InputField
-              label="Volume Multiplier"
-              type="number"
-              step="0.1"
-              value={localSettings.volumeMultiplier}
-              onChange={(v) => handleChange('volumeMultiplier', parseFloat(v) || 0)}
-              suffix="x"
-              helperText="Current vs average volume"
-            />
+            <div>
+              <InputField
+                label="Volume Multiplier"
+                type="number"
+                step="0.1"
+                value={localSettings.volumeMultiplier}
+                onChange={(v) => handleChange('volumeMultiplier', parseFloat(v) || 0)}
+                suffix="x"
+                helperText="Current vs average volume"
+              />
+              {getPresetStatus(localSettings).volume === 'good' && (
+                <PresetStatusBadge status="good" message="Good: 2.0x+ filters well, reduces API calls" />
+              )}
+              {getPresetStatus(localSettings).volume === 'ok' && (
+                <PresetStatusBadge status="ok" message="Okay: 1.5-2.0x may find many stocks, monitor rate limits" />
+              )}
+              {getPresetStatus(localSettings).volume === 'wont-work' && (
+                <PresetStatusBadge status="wont-work" message="Won't work: Less than 1.0x doesn't filter anything" />
+              )}
+            </div>
           </div>
         </section>
 
@@ -435,14 +529,25 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
             Display Settings
           </h3>
           <div className="space-y-3">
-            <InputField
-              label="Number of Stocks"
-              type="number"
-              min="1"
-              max="10"
-              value={localSettings.displayCount}
-              onChange={(v) => handleChange('displayCount', parseInt(v) || 1)}
-            />
+            <div>
+              <InputField
+                label="Number of Stocks"
+                type="number"
+                min="1"
+                max="20"
+                value={localSettings.displayCount}
+                onChange={(v) => handleChange('displayCount', parseInt(v) || 1)}
+              />
+              {getPresetStatus(localSettings).displayCount === 'good' && (
+                <PresetStatusBadge status="good" message="Good: 5-10 stocks optimal, fast scanning" />
+              )}
+              {getPresetStatus(localSettings).displayCount === 'ok' && (
+                <PresetStatusBadge status="ok" message="Okay: 10-20 stocks may be slower, monitor performance" />
+              )}
+              {getPresetStatus(localSettings).displayCount === 'wont-work' && (
+                <PresetStatusBadge status="wont-work" message="Won't work: 20+ stocks causes performance issues and rate limits" />
+              )}
+            </div>
             <div>
               <label className="block text-sm font-medium mb-2">
                 Chart Timeframe
