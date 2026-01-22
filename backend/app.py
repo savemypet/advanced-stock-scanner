@@ -1115,20 +1115,45 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
             chart_data['24h'] = candles
             candles_24h = candles
         
-        # Fetch float data from Yahoo Finance (IBKR doesn't provide float)
+        # Fetch float data from Yahoo Finance or Massive.com (IBKR doesn't provide float)
+        # Try Massive.com first (faster), then Yahoo Finance as fallback
         float_shares = 0
+        float_source = None
+        
+        # Try Massive.com first (if available and scan times are okay)
         try:
-            logging.debug(f"📊 Fetching float data from Yahoo Finance for {symbol}...")
-            ticker = yf.Ticker(symbol)
-            info = ticker.info
-            float_shares = info.get('floatShares', info.get('sharesOutstanding', 0))
-            if float_shares is None:
-                float_shares = 0
-            if float_shares > 0:
-                logging.info(f"✅ Got float data for {symbol}: {float_shares:,} shares from Yahoo Finance")
+            if MASSIVE_KEY != 'YOUR_MASSIVE_API_KEY' and should_use_massive():
+                logging.debug(f"📊 Fetching float data from Massive.com for {symbol}...")
+                float_url = f"https://api.massive.com/v2/reference/financials/{symbol}/float"
+                params = {'apiKey': MASSIVE_KEY}
+                response = requests.get(float_url, params=params, timeout=3)  # Quick timeout
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('status') == 'OK' and data.get('results'):
+                        result = data['results'][0] if isinstance(data['results'], list) else data['results']
+                        float_shares = result.get('free_float', 0)
+                        if float_shares and float_shares > 0:
+                            logging.info(f"✅ Got float data for {symbol}: {float_shares:,} shares from Massive.com")
+                            float_source = 'Massive.com'
+                            track_massive_usage()  # Track usage
         except Exception as e:
-            logging.debug(f"⚠️ Could not fetch float data from Yahoo Finance for {symbol}: {e}")
-            float_shares = 0
+            logging.debug(f"⚠️ Could not fetch float data from Massive.com for {symbol}: {e}")
+        
+        # Fallback to Yahoo Finance if Massive.com didn't work
+        if float_shares == 0 or float_source is None:
+            try:
+                logging.debug(f"📊 Fetching float data from Yahoo Finance for {symbol}...")
+                ticker = yf.Ticker(symbol)
+                info = ticker.info
+                float_shares = info.get('floatShares', info.get('sharesOutstanding', 0))
+                if float_shares is None:
+                    float_shares = 0
+                if float_shares > 0:
+                    logging.info(f"✅ Got float data for {symbol}: {float_shares:,} shares from Yahoo Finance")
+                    float_source = 'Yahoo Finance'
+            except Exception as e:
+                logging.debug(f"⚠️ Could not fetch float data from Yahoo Finance for {symbol}: {e}")
+                float_shares = 0
         
         # Fetch IBKR news for this stock
         ibkr_news = []
@@ -1189,7 +1214,8 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
             'spreadPercent': round(spread_percent, 2) if spread_percent else None,
             'changeAmount': round(change_amount, 2),
             'changePercent': round(change_percent, 2),
-            'float': int(float_shares) if float_shares and float_shares > 0 else 0,  # From Yahoo Finance (IBKR doesn't provide)
+            'float': int(float_shares) if float_shares and float_shares > 0 else 0,  # From Massive.com or Yahoo Finance (IBKR doesn't provide)
+            'floatSource': float_source if float_source else None,  # Track which source provided float
             'marketCap': 0,  # Calculate if needed
             'candles': candles,
             'chartData': chart_data,  # Always includes 24h data
