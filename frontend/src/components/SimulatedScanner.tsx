@@ -917,15 +917,17 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
   }
 
   const handleRefresh = async () => {
-    // Refresh by fetching ONLY real market data stocks from IBKR
+    // Refresh by fetching ONLY stocks discovered by scanner (AI does not scan independently)
     setIsLoading(true)
     try {
-      console.log('🔄 Refreshing real market data stocks from IBKR...')
-      // Try to fetch real market movers first
-      let response = await fetch('http://localhost:5000/api/market-movers?type=gainers')
+      console.log('🔄 Refreshing stocks - ONLY from scanner results...')
+      // AI ONLY uses stocks from scanner - no independent scanning
+      const response = await fetch('http://localhost:5000/api/daily-discovered')
       if (!response.ok) {
-        // Fallback to daily-discovered
-        response = await fetch('http://localhost:5000/api/daily-discovered')
+        console.log('⚠️ No stocks discovered by scanner yet - run a scan first')
+        setSimulatedStocks([])
+        setIsLoading(false)
+        return
       }
       const data = await response.json()
       
