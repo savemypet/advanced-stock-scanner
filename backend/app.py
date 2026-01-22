@@ -899,9 +899,12 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
         
         # Always fetch 24h data for AI study (if not already fetching 24h)
         chart_data = {timeframe: candles}
+        candles_24h = []
+        
         if timeframe != '24h':
             try:
                 logging.info(f"📊 Fetching 24h data for {symbol} from IBKR (AI study)...")
+                # Request 24h data with 1-hour bars
                 hist_24h = IBKR_INSTANCE.reqHistoricalData(
                     contract,
                     endDateTime='',
@@ -910,10 +913,11 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
                     whatToShow='TRADES',
                     useRTH=True
                 )
-                if hist_24h:
+                IBKR_INSTANCE.sleep(0.5)  # Wait for data
+                
+                if hist_24h and len(hist_24h) > 0:
                     df_24h = util.df(hist_24h)
                     if not df_24h.empty:
-                        candles_24h = []
                         for idx, row in df_24h.iterrows():
                             candles_24h.append({
                                 'time': idx.isoformat() if hasattr(idx, 'isoformat') else str(idx),
@@ -925,11 +929,18 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
                             })
                         chart_data['24h'] = candles_24h
                         logging.info(f"✅ Added 24h data to {symbol} ({len(candles_24h)} candles)")
+                    else:
+                        logging.warning(f"⚠️ Empty DataFrame for 24h data of {symbol}")
+                else:
+                    logging.warning(f"⚠️ No 24h bars returned from IBKR for {symbol}")
             except Exception as e:
-                logging.warning(f"⚠️ Could not fetch 24h data for {symbol}: {e}")
+                logging.error(f"❌ Error fetching 24h data for {symbol}: {e}")
+                import traceback
+                logging.error(traceback.format_exc())
         else:
             # If requesting 24h, also add it to chartData
             chart_data['24h'] = candles
+            candles_24h = candles
         
         stock_data = {
             'symbol': symbol,
