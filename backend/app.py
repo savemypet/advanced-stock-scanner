@@ -839,7 +839,7 @@ def _adjust_delay_on_error(error_type: str):
             logging.warning(f"⚠️ Scanner delay at maximum (60s) - error: {error_type}")
 
 def is_market_open() -> bool:
-    """Check if US stock market is currently open (9:30 AM - 4:00 PM ET, Mon-Fri)"""
+    """Check if US stock market is currently open (includes premarket: 4:00 AM - 4:00 PM ET, Mon-Fri)"""
     from datetime import datetime, time
     
     try:
@@ -863,21 +863,30 @@ def is_market_open() -> bool:
             current_day = now_et.weekday()
             logging.warning("⚠️ pytz not available - using local time (may be inaccurate)")
         
-        # Market hours: 9:30 AM - 4:00 PM ET, Monday-Friday
-        market_open_time = time(9, 30)
-        market_close_time = time(16, 0)
+        # Market hours: 
+        # - Premarket: 4:00 AM - 9:30 AM ET
+        # - Regular: 9:30 AM - 4:00 PM ET
+        # - After hours: 4:00 PM - 8:00 PM ET (optional, not included here)
+        premarket_start = time(4, 0)
+        regular_open = time(9, 30)
+        market_close = time(16, 0)
         
         # Check if it's a weekday (Monday=0, Friday=4)
         if current_day >= 5:  # Saturday (5) or Sunday (6)
             logging.info("📴 Market is CLOSED (Weekend)")
             return False
         
-        # Check if within market hours
-        is_open = market_open_time <= current_time <= market_close_time
-        if is_open:
-            logging.info("✅ Market is OPEN")
+        # Check if within market hours (premarket OR regular hours)
+        is_premarket = premarket_start <= current_time < regular_open
+        is_regular = regular_open <= current_time <= market_close
+        is_open = is_premarket or is_regular
+        
+        if is_premarket:
+            logging.info(f"🌅 Market is OPEN (PREMARKET: {current_time} - Regular hours start at {regular_open})")
+        elif is_regular:
+            logging.info(f"✅ Market is OPEN (REGULAR HOURS: {current_time})")
         else:
-            logging.info(f"📴 Market is CLOSED (Current: {current_time}, Hours: {market_open_time}-{market_close_time})")
+            logging.info(f"📴 Market is CLOSED (Current: {current_time}, Premarket: {premarket_start}-{regular_open}, Regular: {regular_open}-{market_close})")
         
         return is_open
     except Exception as e:
@@ -885,6 +894,39 @@ def is_market_open() -> bool:
         import traceback
         logging.error(traceback.format_exc())
         return False  # Assume closed if can't determine (safer)
+
+def is_premarket() -> bool:
+    """Check if currently in premarket hours (4:00 AM - 9:30 AM ET, Mon-Fri)"""
+    from datetime import datetime, time
+    
+    try:
+        try:
+            import pytz
+        except ImportError:
+            pytz = None
+        
+        if pytz:
+            et = pytz.timezone('US/Eastern')
+            now_et = datetime.now(et)
+            current_time = now_et.time()
+            current_day = now_et.weekday()
+        else:
+            now_et = datetime.now()
+            current_time = now_et.time()
+            current_day = now_et.weekday()
+        
+        # Check if it's a weekday
+        if current_day >= 5:
+            return False
+        
+        # Premarket: 4:00 AM - 9:30 AM ET
+        premarket_start = time(4, 0)
+        regular_open = time(9, 30)
+        
+        return premarket_start <= current_time < regular_open
+    except Exception as e:
+        logging.error(f"❌ Error determining premarket status: {e}")
+        return False
 
 def fetch_realtime_ibkr(symbol: str) -> Dict[str, Any]:
     """Fetch real-time stock data using reqMktData (FAST - 10-20 stocks per minute)"""
@@ -975,11 +1017,12 @@ def fetch_realtime_ibkr(symbol: str) -> Dict[str, Any]:
             'dataSource': 'Interactive Brokers',
             'source': 'Interactive Brokers (Real-time Screening)',
             'isRealData': True,
-            'marketStatus': 'OPEN' if market_open else 'CLOSED',
+            'marketStatus': 'PREMARKET' if is_premarket() else ('OPEN' if market_open else 'CLOSED'),
             'hasBidAsk': bid_price is not None and ask_price is not None,
             'realtimeOnly': True,  # Flag to indicate this is real-time only
             'float': 0,  # Not available in real-time
-            'avgVolume': None  # Would need historical data
+            'avgVolume': None,  # Would need historical data
+            'marketStatus': 'PREMARKET' if is_premarket() else ('OPEN' if market_open else 'CLOSED')
         }
     except Exception as e:
         logging.error(f"❌ Error fetching real-time data for {symbol}: {e}")
@@ -1025,8 +1068,11 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
         contract = Stock(symbol, 'SMART', 'USD')
         
         # Request historical data - include yesterday's data
+        in_premarket = is_premarket()
         if not market_open:
             logging.info(f"📊 Market is CLOSED - Fetching historical data for {symbol} {timeframe} (including yesterday)...")
+        elif in_premarket:
+            logging.info(f"🌅 Market is PREMARKET - Fetching {symbol} {timeframe} data from Interactive Brokers (premarket hours)...")
         else:
             logging.info(f"📊 Fetching {symbol} {timeframe} data from Interactive Brokers (Market OPEN, including yesterday)...")
         
@@ -1035,13 +1081,18 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
             duration = '2 D'  # Get 2 days to include yesterday
             logging.info(f"📊 Extended duration to 2 days to include yesterday's data for {symbol}")
         
+        # During premarket, use useRTH=False to get premarket data
+        # During regular hours, use useRTH=True for regular trading hours only
+        # When market is closed, use useRTH=True to get last regular session data
+        use_rth = not in_premarket  # False during premarket to get premarket data, True otherwise
+        
         bars = IBKR_INSTANCE.reqHistoricalData(
             contract,
             endDateTime='',
             durationStr=duration,
             barSizeSetting=bar_size,
             whatToShow='TRADES',
-            useRTH=market_open  # Only use regular trading hours if market is open
+            useRTH=use_rth  # False during premarket to include premarket data
         )
         
         if not bars:
@@ -1105,13 +1156,15 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
             try:
                 logging.info(f"📊 Fetching 24h data for {symbol} from IBKR (AI study)...")
                 # Request 24h data with 1-hour bars
+                # During premarket, include premarket data (useRTH=False)
+                in_premarket = is_premarket()
                 hist_24h = IBKR_INSTANCE.reqHistoricalData(
                     contract,
                     endDateTime='',
                     durationStr='1 D',
                     barSizeSetting='1 hour',
                     whatToShow='TRADES',
-                    useRTH=True
+                    useRTH=not in_premarket  # False during premarket to include premarket data
                 )
                 IBKR_INSTANCE.sleep(0.5)  # Wait for data
                 
@@ -1236,7 +1289,7 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
             'dataSource': 'Interactive Brokers',
             'source': f'Interactive Brokers ({timeframe} - {len(candles)} candles, 24h data included)',
             'isRealData': True,
-            'marketStatus': 'OPEN' if market_open else 'CLOSED',
+            'marketStatus': 'PREMARKET' if is_premarket() else ('OPEN' if market_open else 'CLOSED'),
             'hasBidAsk': bid_price is not None and ask_price is not None,  # Indicates real-time data available
             'ibkrNews': ibkr_news,  # IBKR news headlines
             'hasNews': len(ibkr_news) > 0,
@@ -1616,7 +1669,17 @@ class StockScanner:
             
             # Apply filters
             price_check = stock_data.get('currentPrice') and min_price <= stock_data['currentPrice'] <= max_price
-            float_check = stock_data.get('float', 0) <= max_float
+            
+            # Float check: Only apply if Massive returned float data (skip if no float from Massive)
+            float_value = stock_data.get('float', 0)
+            float_source = stock_data.get('floatSource')
+            if float_value > 0 and float_source:  # Only check float if Massive actually returned it
+                float_check = float_value <= max_float
+                logging.debug(f"📊 {symbol}: Float check applied ({float_value:,} <= {max_float:,}) from {float_source}")
+            else:
+                float_check = True  # Skip float filter if Massive didn't return float data
+                logging.debug(f"📊 {symbol}: Float check skipped (no float data from Massive)")
+            
             gain_check = stock_data.get('changePercent', 0) >= min_gain
             
             # Volume check: skip if real-time only and no avgVolume, or check if available
@@ -1931,7 +1994,7 @@ def get_stock(symbol):
         
         if stock_data:
             candle_count = len(stock_data.get('candles', []))
-            market_status = stock_data.get('marketStatus', 'OPEN' if market_open else 'CLOSED')
+            market_status = stock_data.get('marketStatus', 'PREMARKET' if is_premarket() else ('OPEN' if market_open else 'CLOSED'))
             logging.info(f"✅ Got {timeframe} data from IBKR for {symbol} ({candle_count} candles, Market: {market_status})")
             stock_data['source'] = 'Interactive Brokers (Real Data)'
             stock_data['isRealData'] = True
@@ -2066,7 +2129,7 @@ def preload_stocks():
                 'stocks': [],
                 'count': 0,
                 'source': 'Scanner Results Only',
-                'marketStatus': 'CLOSED' if not is_market_open() else 'OPEN',
+                'marketStatus': 'PREMARKET' if is_premarket() else ('OPEN' if is_market_open() else 'CLOSED'),
                 'note': 'No stocks discovered by scanner yet. Run a scan first. AI only learns from scanner picks.',
                 'message': 'AI learning only uses stocks discovered by scanner - no independent scanning'
             })
@@ -2078,7 +2141,7 @@ def preload_stocks():
             'stocks': daily_discovered_stocks,
             'count': len(daily_discovered_stocks),
             'source': 'Scanner Results Only',
-            'marketStatus': 'CLOSED' if not is_market_open() else 'OPEN',
+            'marketStatus': 'PREMARKET' if is_premarket() else ('OPEN' if is_market_open() else 'CLOSED'),
             'note': 'AI learning only uses stocks discovered by scanner - no independent scanning',
             'date': daily_discovered_date.isoformat()
         })
