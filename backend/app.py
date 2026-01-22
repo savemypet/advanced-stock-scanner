@@ -32,6 +32,12 @@ IBKR_CONNECTED = False
 IBKR_INSTANCE = None
 IBKR_LOCK = threading.Lock()
 
+# Auto-adjustable scanner delay (increases by 1s on errors)
+SCANNER_DELAY = 12  # Starting delay in seconds
+SCANNER_DELAY_LOCK = threading.Lock()
+LAST_ERROR_TIME = None
+ERROR_COUNT = 0
+
 app = Flask(__name__)
 CORS(app)
 logging.basicConfig(level=logging.INFO)
@@ -1013,6 +1019,7 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
         
         if not bars:
             logging.warning(f"⚠️ No data returned from IBKR for {symbol}")
+            _adjust_delay_on_error("No data returned")
             return None
         
         # Convert to DataFrame
@@ -1020,6 +1027,7 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
         
         if df.empty:
             logging.warning(f"⚠️ Empty DataFrame from IBKR for {symbol}")
+            _adjust_delay_on_error("Empty DataFrame")
             return None
         
         # Get current quote with bid/ask data
@@ -1186,7 +1194,13 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
         return stock_data
         
     except Exception as e:
+        error_msg = str(e).lower()
         logging.error(f"❌ Error fetching {symbol} from Interactive Brokers: {e}")
+        
+        # Check for rate limit or pacing violation errors
+        if any(keyword in error_msg for keyword in ['rate limit', 'pacing violation', '60 requests', 'throttle', 'too many requests', '429']):
+            _adjust_delay_on_error("Rate limit/pacing violation detected")
+        
         return None
 
 class StockScanner:
@@ -1664,7 +1678,9 @@ def scan_stocks():
             'ibkrPort': IBKR_PORT,
             'ibkrUsername': IBKR_USERNAME,
             'fallbackAvailable': False,  # No fallbacks - IBKR only
-            'recommendedInterval': 15,  # Recommended: 15 seconds (balanced speed + reliability, 4 scans/min)
+            'recommendedInterval': get_scanner_delay(),  # Auto-adjusted based on errors (starts at 12s, increases by 1s on errors)
+            'currentDelay': get_scanner_delay(),
+            'autoAdjusted': True,
             'mode': 'IBKR_REALTIME_SCREENING',  # Option 2: Real-time screening (default)
             'scanSpeed': '10-20 stocks per minute',
             'method': 'reqMktData (real-time quotes)'
