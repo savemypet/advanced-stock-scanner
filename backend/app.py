@@ -1310,11 +1310,34 @@ class StockScanner:
         newly_added = []
         
         for symbol in scan_symbols:
-            # Get primary timeframe data
+            # Get primary timeframe data (this already includes 24h data from get_stock_data)
             stock_data = self.get_stock_data(symbol, timeframe)
             
             if stock_data is None:
                 continue
+            
+            # Ensure 24h data is ALWAYS included for AI study
+            if 'chartData' not in stock_data:
+                stock_data['chartData'] = {}
+            
+            if '24h' not in stock_data['chartData']:
+                logging.info(f"📊 Ensuring 24h data for {symbol} (AI study requirement)...")
+                try:
+                    # Fetch 24h data specifically
+                    stock_24h = fetch_from_ibkr(symbol, '24h')
+                    if stock_24h and stock_24h.get('candles'):
+                        stock_data['chartData']['24h'] = stock_24h['candles']
+                        logging.info(f"✅ Added 24h data to {symbol} ({len(stock_24h['candles'])} candles)")
+                    else:
+                        # Use existing candles if available
+                        if stock_data.get('candles'):
+                            stock_data['chartData']['24h'] = stock_data['candles']
+                            logging.info(f"✅ Using existing candles as 24h data for {symbol}")
+                except Exception as e:
+                    logging.warning(f"⚠️ Could not fetch 24h data for {symbol}: {e}")
+                    # Still add existing candles if available
+                    if stock_data.get('candles'):
+                        stock_data['chartData']['24h'] = stock_data['candles']
             
             # Apply filters
             price_check = min_price <= stock_data['currentPrice'] <= max_price
@@ -1344,26 +1367,13 @@ class StockScanner:
                 stock_data['hasNews'] = symbol in news_cache and len(news_cache[symbol]) > 0
                 stock_data['newsCount'] = len(news_cache.get(symbol, []))
                 
-                # OPTIMIZED: Fetch all timeframes in ONE API call by reusing historical data
-                # This saves 3 API calls per stock (was 4, now 1)
-                chart_data = {}
+                # Ensure chartData has current timeframe
+                if timeframe not in stock_data['chartData']:
+                    stock_data['chartData'][timeframe] = stock_data.get('candles', [])
                 
-                # Strategy: Fetch the LONGEST timeframe (24h) and derive shorter ones
-                # This way we only make 1-2 API calls instead of 4
-                try:
-                    # Use existing candles for current timeframe
-                    chart_data[timeframe] = stock_data['candles']
-                    
-                    # For other timeframes, only fetch if CRITICALLY needed
-                    # Most users stick with 5m, so we'll lazy-load others on demand
-                    # For now, include current timeframe only to save API quota
-                    logging.info(f"📊 Loaded {timeframe} chart for {symbol} (other timeframes available on-demand)")
-                    
-                except Exception as e:
-                    logging.warning(f"⚠️ Could not prepare chart data for {symbol}: {str(e)}")
-                    chart_data = {timeframe: stock_data.get('candles', [])}
+                # Mark that 24h data is available for AI study
+                stock_data['has24hData'] = '24h' in stock_data.get('chartData', {}) and len(stock_data['chartData'].get('24h', [])) > 0
                 
-                stock_data['chartData'] = chart_data
                 results.append(stock_data)
         
         # Sort by change percent (highest first)
@@ -1484,26 +1494,36 @@ def get_market_movers():
         
         stocks = []
         
-        for symbol in popular_symbols[:20]:  # Limit to 20 for performance
+        # Fetch ALL popular symbols with 24h data for AI study
+        for symbol in popular_symbols:  # Process all symbols
             try:
-                # Fetch from IBKR
+                # Fetch from IBKR with 24h timeframe (ensures 24h data for AI study)
+                logging.info(f"📊 Fetching {symbol} with 24h data for AI study...")
                 stock_data = fetch_from_ibkr(symbol, '24h')
                 if not stock_data:
+                    logging.warning(f"⚠️ No data for {symbol}, skipping...")
                     continue
                 
-                # Filter based on movers type
-                change_percent = stock_data.get('changePercent', 0)
-                if movers_type == 'gainers' and change_percent < 2:
-                    continue
-                if movers_type == 'losers' and change_percent > -2:
-                    continue
-                
-                # Ensure 24h data is included
+                # Ensure 24h data is in chartData
                 if '24h' not in stock_data.get('chartData', {}):
-                    ibkr_24h = fetch_from_ibkr(symbol, '24h')
-                    if ibkr_24h and ibkr_24h.get('candles'):
-                        stock_data['chartData']['24h'] = ibkr_24h['candles']
+                    if stock_data.get('candles'):
+                        stock_data['chartData']['24h'] = stock_data['candles']
+                        logging.info(f"✅ Added 24h data to chartData for {symbol}")
                 
+                # Also fetch 5m data for detailed view
+                if '5m' not in stock_data.get('chartData', {}):
+                    try:
+                        stock_5m = fetch_from_ibkr(symbol, '5m')
+                        if stock_5m and stock_5m.get('candles'):
+                            stock_data['chartData']['5m'] = stock_5m['candles']
+                            logging.info(f"✅ Added 5m data to chartData for {symbol}")
+                    except Exception as e:
+                        logging.warning(f"⚠️ Could not fetch 5m data for {symbol}: {e}")
+                
+                # Filter based on movers type (but still include all for study)
+                change_percent = stock_data.get('changePercent', 0)
+                
+                # Add all stocks for study, but mark them by type
                 stocks.append({
                     'symbol': stock_data['symbol'],
                     'name': stock_data['name'],
@@ -1517,20 +1537,20 @@ def get_market_movers():
                     'dayHigh': stock_data['dayHigh'],
                     'dayLow': stock_data['dayLow'],
                     'openPrice': stock_data['openPrice'],
-                    'candles': stock_data.get('candles', []),
-                    'chartData': stock_data.get('chartData', {}),
-                    'source': f'Interactive Brokers Market Movers ({movers_type}) - Real 24h Data',
+                    'candles': stock_data.get('candles', []),  # 24h candles as primary
+                    'chartData': stock_data.get('chartData', {}),  # Includes both 24h and 5m
+                    'source': f'Interactive Brokers - Real 24h Data for AI Study',
                     'isHot': abs(change_percent) > 5,
-                    'signal': stock_data.get('signal', 'HOLD')
+                    'signal': stock_data.get('signal', 'HOLD'),
+                    'has24hData': '24h' in stock_data.get('chartData', {}),
+                    'has5mData': '5m' in stock_data.get('chartData', {})
                 })
                 
-                if len(stocks) >= 20:  # Limit to top 20
-                    break
             except Exception as e:
                 logging.warning(f"⚠️ Error processing {symbol} from IBKR: {e}")
                 continue
         
-        # Sort by change percent
+        # Sort by change percent, but return ALL stocks for AI study
         if movers_type == 'gainers':
             stocks.sort(key=lambda x: x['changePercent'], reverse=True)
         elif movers_type == 'losers':
@@ -1538,12 +1558,23 @@ def get_market_movers():
         elif movers_type == 'active':
             stocks.sort(key=lambda x: x['volume'], reverse=True)
         
+        # Filter by type if needed, but prioritize showing all with 24h data
+        filtered_stocks = stocks
+        if movers_type == 'gainers':
+            filtered_stocks = [s for s in stocks if s['changePercent'] >= 0]
+        elif movers_type == 'losers':
+            filtered_stocks = [s for s in stocks if s['changePercent'] <= 0]
+        # 'active' shows all
+        
+        logging.info(f"✅ Returning {len(filtered_stocks)} stocks with 24h data for AI study")
+        
         return jsonify({
             'success': True,
-            'stocks': stocks[:20],  # Return top 20
-            'count': len(stocks),
+            'stocks': filtered_stocks,  # Return ALL stocks with 24h data
+            'count': len(filtered_stocks),
             'type': movers_type,
-            'source': 'Interactive Brokers Market Movers'
+            'source': 'Interactive Brokers - All Stocks with 24h Data for AI Study',
+            'allHave24hData': all(s.get('has24hData', False) for s in filtered_stocks)
         })
         
     except Exception as e:
