@@ -1008,6 +1008,52 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
             chart_data['24h'] = candles
             candles_24h = candles
         
+        # Fetch IBKR news for this stock
+        ibkr_news = []
+        try:
+            logging.info(f"📰 Fetching IBKR news for {symbol}...")
+            news_headlines = IBKR_INSTANCE.reqNewsHeadlines(
+                contract.conId if hasattr(contract, 'conId') else None,
+                '',
+                ''
+            )
+            IBKR_INSTANCE.sleep(0.5)  # Wait for news data
+            
+            if news_headlines:
+                for headline in news_headlines[:5]:  # Limit to 5 most recent
+                    # Get full news article
+                    try:
+                        news_article = IBKR_INSTANCE.reqNewsArticle(
+                            headline.providerCode,
+                            headline.articleId,
+                            ''
+                        )
+                        IBKR_INSTANCE.sleep(0.2)
+                        
+                        ibkr_news.append({
+                            'title': headline.headline if hasattr(headline, 'headline') else '',
+                            'time': headline.time.isoformat() if hasattr(headline, 'time') and headline.time else datetime.now().isoformat(),
+                            'provider': headline.providerCode if hasattr(headline, 'providerCode') else 'IBKR',
+                            'articleId': headline.articleId if hasattr(headline, 'articleId') else '',
+                            'source': 'Interactive Brokers',
+                            'url': f"https://www.interactivebrokers.com/en/index.php?f=news&id={headline.articleId}" if hasattr(headline, 'articleId') else None
+                        })
+                    except Exception as e:
+                        # If article fetch fails, still include headline
+                        ibkr_news.append({
+                            'title': headline.headline if hasattr(headline, 'headline') else '',
+                            'time': headline.time.isoformat() if hasattr(headline, 'time') and headline.time else datetime.now().isoformat(),
+                            'provider': headline.providerCode if hasattr(headline, 'providerCode') else 'IBKR',
+                            'source': 'Interactive Brokers',
+                            'url': None
+                        })
+                        logging.debug(f"Could not fetch full article for {symbol}: {e}")
+                
+                logging.info(f"✅ Found {len(ibkr_news)} IBKR news items for {symbol}")
+        except Exception as e:
+            logging.warning(f"⚠️ Could not fetch IBKR news for {symbol}: {e}")
+            # IBKR news is optional, continue without it
+        
         stock_data = {
             'symbol': symbol,
             'name': name,
@@ -1035,7 +1081,10 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
             'source': f'Interactive Brokers ({timeframe} - {len(candles)} candles, 24h data included)',
             'isRealData': True,
             'marketStatus': 'OPEN' if market_open else 'CLOSED',
-            'hasBidAsk': bid_price is not None and ask_price is not None  # Indicates real-time data available
+            'hasBidAsk': bid_price is not None and ask_price is not None,  # Indicates real-time data available
+            'ibkrNews': ibkr_news,  # IBKR news headlines
+            'hasNews': len(ibkr_news) > 0,
+            'newsCount': len(ibkr_news)
         }
         
         logging.info(f"✅ Successfully fetched {symbol} from Interactive Brokers: ${current_price} ({change_percent:+.2f}%) - {len(candles)} candles, 24h data: {len(chart_data.get('24h', []))} candles")
@@ -1386,9 +1435,13 @@ class StockScanner:
                 
                 stock_data['isHot'] = stock_data['volume'] > stock_data['avgVolume'] * 5
                 
-                # Check if this stock has news (from 4 AM news cache)
-                stock_data['hasNews'] = symbol in news_cache and len(news_cache[symbol]) > 0
-                stock_data['newsCount'] = len(news_cache.get(symbol, []))
+                # Check if this stock has news (from 4 AM news cache or IBKR news)
+                external_news = news_cache.get(symbol, [])
+                ibkr_news = stock_data.get('ibkrNews', [])
+                all_news = external_news + ibkr_news
+                stock_data['hasNews'] = len(all_news) > 0
+                stock_data['newsCount'] = len(all_news)
+                stock_data['allNews'] = all_news  # Combine IBKR + external news
                 
                 # Ensure chartData has current timeframe
                 if timeframe not in stock_data['chartData']:
