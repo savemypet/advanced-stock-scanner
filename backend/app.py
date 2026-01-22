@@ -1589,7 +1589,7 @@ def get_stock(symbol):
         
         if stock_data:
             candle_count = len(stock_data.get('candles', []))
-            market_status = stock_data.get('marketStatus', 'UNKNOWN')
+            market_status = stock_data.get('marketStatus', 'OPEN' if market_open else 'CLOSED')
             logging.info(f"✅ Got {timeframe} data from IBKR for {symbol} ({candle_count} candles, Market: {market_status})")
             stock_data['source'] = 'Interactive Brokers (Real Data)'
             stock_data['isRealData'] = True
