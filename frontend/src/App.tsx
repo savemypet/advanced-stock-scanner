@@ -126,12 +126,18 @@ function App() {
         
         setStocks(stocksWithPatterns)
         setLastUpdate(new Date())
+      } else {
+        // Handle failed scan (e.g., timeout)
+        console.warn('Scan failed:', result.error || 'Unknown error')
+        // Keep existing stocks, don't clear them on timeout
       }
     } catch (error: any) {
       console.error('Scan error:', error)
       // IBKR only mode - log error but don't show popup
       // Errors are logged to console for debugging
+      // Keep existing stocks on error
     } finally {
+      // Always reset loading state, even on timeout/error
       setIsLoading(false)
     }
   }, [settings])

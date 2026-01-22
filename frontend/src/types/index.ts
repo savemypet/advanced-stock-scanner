@@ -90,9 +90,25 @@ export interface ScannerSettings {
   useMassive: boolean;
 }
 
+export interface ApiStatus {
+  activeSource: string;
+  ibkrConnected: boolean;
+  ibkrHost?: string;
+  ibkrPort?: number;
+  ibkrUsername?: string;
+  fallbackAvailable?: boolean;
+  recommendedInterval?: number;
+  currentDelay?: number;
+  autoAdjusted?: boolean;
+  mode?: string;
+  scanSpeed?: string;
+  method?: string;
+}
+
 export interface ScanResult {
   success: boolean;
   stocks: Stock[];
   timestamp: string;
   error?: string;
+  apiStatus?: ApiStatus;
 }
