@@ -962,7 +962,8 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
             'signal': 'BUY' if change_percent > 3 else ('SELL' if change_percent < -3 else 'HOLD'),
             'dataSource': 'Interactive Brokers',
             'source': f'Interactive Brokers ({timeframe} - {len(candles)} candles, 24h data included)',
-            'isRealData': True
+            'isRealData': True,
+            'marketStatus': 'OPEN' if market_open else 'CLOSED'
         }
         
         logging.info(f"✅ Successfully fetched {symbol} from Interactive Brokers: ${current_price} ({change_percent:+.2f}%) - {len(candles)} candles, 24h data: {len(chart_data.get('24h', []))} candles")
@@ -1539,27 +1540,35 @@ def get_stock(symbol):
     """Get detailed data for a specific stock - ONLY Interactive Brokers"""
     try:
         timeframe = request.args.get('timeframe', '5m')
+        market_open = is_market_open()
         
         # ONLY use Interactive Brokers - no fallbacks
-        logging.info(f"📊 Fetching {timeframe} chart data for {symbol} from Interactive Brokers ONLY")
+        if not market_open:
+            logging.info(f"📊 Market is CLOSED - Fetching historical data for {symbol} {timeframe}")
+        else:
+            logging.info(f"📊 Fetching {timeframe} chart data for {symbol} from Interactive Brokers ONLY (Market OPEN)")
         
         stock_data = scanner.get_stock_data(symbol, timeframe)
         
         if stock_data:
             candle_count = len(stock_data.get('candles', []))
-            logging.info(f"✅ Got {timeframe} data from IBKR for {symbol} ({candle_count} candles)")
+            market_status = stock_data.get('marketStatus', 'UNKNOWN')
+            logging.info(f"✅ Got {timeframe} data from IBKR for {symbol} ({candle_count} candles, Market: {market_status})")
             stock_data['source'] = 'Interactive Brokers (Real Data)'
             stock_data['isRealData'] = True
+            stock_data['marketStatus'] = market_status
             return jsonify({
                 'success': True,
-                'stock': stock_data
+                'stock': stock_data,
+                'marketStatus': market_status
             })
         else:
             logging.error(f"❌ No data available from IBKR for {symbol} {timeframe}")
             return jsonify({
                 'success': False,
                 'error': f'Interactive Brokers unavailable for {symbol}. Make sure TWS/IB Gateway is running and logged in.',
-                'help': f'1. Start TWS or IB Gateway\n2. Log in as {IBKR_USERNAME}\n3. Enable API: Configure > API > Settings\n4. Set port: {IBKR_PORT}'
+                'help': f'1. Start TWS or IB Gateway\n2. Log in as {IBKR_USERNAME}\n3. Enable API: Configure > API > Settings\n4. Set port: {IBKR_PORT}',
+                'marketStatus': 'CLOSED' if not market_open else 'UNKNOWN'
             }), 503
     except Exception as e:
         logging.error(f"❌ Error in get_stock endpoint: {str(e)}")
