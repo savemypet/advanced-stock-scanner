@@ -1201,25 +1201,15 @@ class StockScanner:
         with active_symbols_lock:
             scan_symbols = list(active_symbols)
         
-        # Check if high-quota APIs are available
-        yahoo_available = should_use_yahoo()
-        serpapi_available = should_use_serpapi()
-        alphavantage_available = should_use_alphavantage()
-        massive_only = not (yahoo_available or serpapi_available or alphavantage_available) and should_use_massive()
+        # IBKR ONLY MODE - No other APIs
+        ibkr_available = IBKR_AVAILABLE and connect_ibkr()
         
-        # SMART SCALING:
-        # - When Massive.com ONLY: Limit to 5 stocks (matches 5 calls/min rate limit)
-        # - When Yahoo/SerpAPI/AlphaVantage available: Use all 10 stocks (faster scanning)
-        if massive_only and len(scan_symbols) > 5:
-            logging.info(f"⚡ Massive.com ONLY mode: Limiting to 5 stocks (5/min rate limit)")
-            scan_symbols = scan_symbols[:5]  # Only scan first 5 to match Massive.com's rate limit
-            discovery_sample = []
-        else:
-            # High-quota APIs available - can scan more stocks
-            discovery_sample = []  # Still disabled for now to optimize performance
-            logging.info(f"🚀 High-quota APIs available: Scanning {len(scan_symbols)} stocks")
+        if not ibkr_available:
+            logging.error(f"❌ Interactive Brokers unavailable - cannot scan stocks")
+            logging.error(f"💡 Make sure TWS/IB Gateway is running and logged in as {IBKR_USERNAME}")
+            return []
         
-        logging.info(f"🔍 Scanning {len(scan_symbols)} symbols (API: {', '.join([a for a in ['Yahoo' if yahoo_available else '', 'SerpAPI' if serpapi_available else '', 'AlphaVantage' if alphavantage_available else '', 'Massive' if should_use_massive() else ''] if a])})")
+        logging.info(f"🔍 Scanning {len(scan_symbols)} symbols (API: Interactive Brokers ONLY)")
         
         results = []
         newly_added = []
@@ -1337,61 +1327,18 @@ def scan_stocks():
                     daily_discovered_stocks.append(stock)
                     logging.info(f"📊 Added {stock['symbol']} to today's discovered stocks with real charts (total: {len(daily_discovered_stocks)})")
         
-        # Include smart API switching status
-        yahoo_available = should_use_yahoo()
-        serpapi_available = should_use_serpapi()
-        alphavantage_available = should_use_alphavantage()
-        massive_available = should_use_massive()
-        
-        # Determine active source (Massive.com is PRIMARY - fastest refresh at 5/min)
-        if massive_available:
-            active_source = 'Massive.com'
-        elif alphavantage_available:
-            active_source = 'AlphaVantage'
-        elif yahoo_available:
-            active_source = 'Yahoo Finance'
-        elif serpapi_available:
-            active_source = 'SerpAPI'
-        else:
-            active_source = 'None (all exhausted)'
-        
-        # Massive.com call count (last minute)
-        with massive_calls_lock:
-            current_time = time.time()
-            massive_recent_calls = [
-                call for call in massive_calls_history 
-                if current_time - call < MASSIVE_RATE_WINDOW
-            ]
-            massive_calls_count = len(massive_recent_calls)
-        
-        # Smart interval recommendation based on available APIs
-        # 20s when Yahoo/SerpAPI/AlphaVantage available (high quota APIs)
-        # 60s when ONLY Massive.com available (5/min limit)
-        high_quota_apis_available = yahoo_available or serpapi_available or alphavantage_available
-        recommended_interval = 20 if high_quota_apis_available else 60
+        # IBKR ONLY MODE - API Status
+        ibkr_connected = IBKR_AVAILABLE and IBKR_CONNECTED and (IBKR_INSTANCE and IBKR_INSTANCE.isConnected() if IBKR_INSTANCE else False)
         
         api_status = {
-            'yahooLocked': use_yahoo_locked,
-            'yahooUnlockAt': yahoo_locked_until.isoformat() if yahoo_locked_until else None,
-            'serpapiQuota': {
-                'used': serpapi_calls_used,
-                'limit': SERPAPI_FREE_LIMIT,
-                'remaining': SERPAPI_FREE_LIMIT - serpapi_calls_used
-            },
-            'alphavantageQuota': {
-                'used': alphavantage_calls_used,
-                'limit': ALPHAVANTAGE_FREE_LIMIT,
-                'remaining': ALPHAVANTAGE_FREE_LIMIT - alphavantage_calls_used
-            },
-            'massiveRateLimit': {
-                'used': massive_calls_count,
-                'limit': MASSIVE_RATE_LIMIT,
-                'remaining': MASSIVE_RATE_LIMIT - massive_calls_count,
-                'window': f'{MASSIVE_RATE_WINDOW}s'
-            },
-            'activeSource': active_source,
-            'fallbackAvailable': serpapi_available or alphavantage_available or massive_available,
-            'recommendedInterval': recommended_interval  # Smart: 20s with high-quota APIs, 60s with Massive.com only
+            'activeSource': 'Interactive Brokers' if ibkr_connected else 'Not Connected',
+            'ibkrConnected': ibkr_connected,
+            'ibkrHost': IBKR_HOST,
+            'ibkrPort': IBKR_PORT,
+            'ibkrUsername': IBKR_USERNAME,
+            'fallbackAvailable': False,  # No fallbacks - IBKR only
+            'recommendedInterval': 5,  # IBKR has no rate limits, can scan frequently
+            'mode': 'IBKR_ONLY'
         }
         
         return jsonify({
