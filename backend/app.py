@@ -1419,127 +1419,74 @@ def scan_stocks():
 
 @app.route('/api/market-movers', methods=['GET'])
 def get_market_movers():
-    """Fetch real market movers from Yahoo Finance (similar to TradingView market movers)"""
+    """Fetch real market movers from Interactive Brokers ONLY"""
     try:
         movers_type = request.args.get('type', 'gainers')  # gainers, losers, active
         
-        # Fetch market movers using yfinance
-        import yfinance as yf
+        if not IBKR_AVAILABLE:
+            return jsonify({
+                'success': False,
+                'error': 'Interactive Brokers API not available. Install ib-insync: pip install ib-insync'
+            }), 500
         
-        # Yahoo Finance screener IDs
-        screener_map = {
-            'gainers': 'day_gainers',
-            'losers': 'day_losers',
-            'active': 'most_active'
-        }
+        if not connect_ibkr():
+            return jsonify({
+                'success': False,
+                'error': f'Cannot connect to Interactive Brokers. Make sure TWS/IB Gateway is running and logged in as {IBKR_USERNAME}'
+            }), 500
         
-        screener_id = screener_map.get(movers_type, 'day_gainers')
-        
-        # Use yfinance to get market movers
-        # Note: yfinance doesn't have direct screener support, so we'll use a workaround
-        # Fetch top stocks from S&P 500 and filter by performance
+        # Use IBKR to get market movers
+        # Get popular symbols and fetch their data
+        popular_symbols = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA', 'AMD', 'NFLX', 'INTC',
+                          'GME', 'AMC', 'PLTR', 'SOFI', 'NIO', 'LCID', 'ATER', 'BBIG', 'SPY', 'QQQ']
         
         stocks = []
         
-        # Get S&P 500 tickers
-        import requests
-        sp500_url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-        try:
-            response = requests.get(sp500_url, timeout=10)
-            if response.status_code == 200:
-                import re
-                # Extract tickers from HTML
-                ticker_pattern = r'<a href="/wiki/([A-Z]+)" title="[^"]+">([A-Z]+)</a>'
-                matches = re.findall(ticker_pattern, response.text)
-                tickers = [match[1] for match in matches[:100]]  # Limit to first 100 for speed
+        for symbol in popular_symbols[:20]:  # Limit to 20 for performance
+            try:
+                # Fetch from IBKR
+                stock_data = fetch_from_ibkr(symbol, '24h')
+                if not stock_data:
+                    continue
                 
-                # Fetch data for each ticker
-                for symbol in tickers[:50]:  # Limit to 50 for performance
-                    try:
-                        ticker = yf.Ticker(symbol)
-                        info = ticker.info
-                        hist = ticker.history(period='1d', interval='5m')
-                        
-                        if hist.empty:
-                            continue
-                        
-                        current_price = float(hist['Close'].iloc[-1])
-                        previous_close = float(info.get('previousClose', current_price * 0.99))
-                        change = current_price - previous_close
-                        change_percent = (change / previous_close * 100) if previous_close > 0 else 0
-                        volume = int(info.get('volume', 0))
-                        
-                        # Filter based on movers type
-                        if movers_type == 'gainers' and change_percent < 2:
-                            continue
-                        if movers_type == 'losers' and change_percent > -2:
-                            continue
-                        
-                        # Generate 5m candles for detailed view
-                        candles_5m = []
-                        for idx, row in hist.iterrows():
-                            candles_5m.append({
-                                'time': idx.isoformat(),
-                                'open': round(float(row['Open']), 2),
-                                'high': round(float(row['High']), 2),
-                                'low': round(float(row['Low']), 2),
-                                'close': round(float(row['Close']), 2),
-                                'volume': int(row['Volume'])
-                            })
-                        
-                        # Fetch 24h data for AI study (full day analysis)
-                        candles_24h = []
-                        try:
-                            hist_24h = ticker.history(period='1d', interval='1h')  # 1-hour candles for 24h view
-                            if not hist_24h.empty:
-                                for idx, row in hist_24h.iterrows():
-                                    candles_24h.append({
-                                        'time': idx.isoformat(),
-                                        'open': round(float(row['Open']), 2),
-                                        'high': round(float(row['High']), 2),
-                                        'low': round(float(row['Low']), 2),
-                                        'close': round(float(row['Close']), 2),
-                                        'volume': int(row['Volume'])
-                                    })
-                        except Exception as e:
-                            logging.warning(f"⚠️ Could not fetch 24h data for {symbol}: {e}")
-                        
-                        # If no real candles, generate synthetic
-                        if not candles_5m:
-                            candles_5m = generate_synthetic_candles(symbol, previous_close, current_price, '5m')
-                        if not candles_24h:
-                            candles_24h = generate_synthetic_candles(symbol, previous_close, current_price, '24h')
-                        
-                        stocks.append({
-                            'symbol': symbol,
-                            'name': info.get('longName', symbol),
-                            'currentPrice': current_price,
-                            'previousClose': previous_close,
-                            'changeAmount': round(change, 2),
-                            'changePercent': round(change_percent, 2),
-                            'volume': volume,
-                            'avgVolume': int(info.get('averageVolume', volume)),
-                            'float': int(info.get('sharesOutstanding', 0)),
-                            'dayHigh': float(hist['High'].max()),
-                            'dayLow': float(hist['Low'].min()),
-                            'openPrice': float(hist['Open'].iloc[0]),
-                            'candles': candles_24h if candles_24h else candles_5m,  # Use 24h as primary
-                            'chartData': {
-                                '5m': candles_5m,
-                                '24h': candles_24h  # Real 24h data for AI study
-                            },
-                            'source': f'Yahoo Finance Market Movers ({movers_type}) - Real 24h Data',
-                            'isHot': abs(change_percent) > 5,
-                            'signal': 'BUY' if change_percent > 3 else ('SELL' if change_percent < -3 else 'HOLD')
-                        })
-                        
-                        if len(stocks) >= 20:  # Limit to top 20
-                            break
-                    except Exception as e:
-                        logging.warning(f"⚠️ Error processing {symbol}: {e}")
-                        continue
-        except Exception as e:
-            logging.error(f"❌ Error fetching S&P 500 list: {e}")
+                # Filter based on movers type
+                change_percent = stock_data.get('changePercent', 0)
+                if movers_type == 'gainers' and change_percent < 2:
+                    continue
+                if movers_type == 'losers' and change_percent > -2:
+                    continue
+                
+                # Ensure 24h data is included
+                if '24h' not in stock_data.get('chartData', {}):
+                    ibkr_24h = fetch_from_ibkr(symbol, '24h')
+                    if ibkr_24h and ibkr_24h.get('candles'):
+                        stock_data['chartData']['24h'] = ibkr_24h['candles']
+                
+                stocks.append({
+                    'symbol': stock_data['symbol'],
+                    'name': stock_data['name'],
+                    'currentPrice': stock_data['currentPrice'],
+                    'previousClose': stock_data['previousClose'],
+                    'changeAmount': stock_data['changeAmount'],
+                    'changePercent': stock_data['changePercent'],
+                    'volume': stock_data['volume'],
+                    'avgVolume': stock_data['avgVolume'],
+                    'float': stock_data.get('float', 0),
+                    'dayHigh': stock_data['dayHigh'],
+                    'dayLow': stock_data['dayLow'],
+                    'openPrice': stock_data['openPrice'],
+                    'candles': stock_data.get('candles', []),
+                    'chartData': stock_data.get('chartData', {}),
+                    'source': f'Interactive Brokers Market Movers ({movers_type}) - Real 24h Data',
+                    'isHot': abs(change_percent) > 5,
+                    'signal': stock_data.get('signal', 'HOLD')
+                })
+                
+                if len(stocks) >= 20:  # Limit to top 20
+                    break
+            except Exception as e:
+                logging.warning(f"⚠️ Error processing {symbol} from IBKR: {e}")
+                continue
         
         # Sort by change percent
         if movers_type == 'gainers':
@@ -1554,7 +1501,7 @@ def get_market_movers():
             'stocks': stocks[:20],  # Return top 20
             'count': len(stocks),
             'type': movers_type,
-            'source': 'Yahoo Finance Market Movers'
+            'source': 'Interactive Brokers Market Movers'
         })
         
     except Exception as e:
@@ -1597,48 +1544,31 @@ def get_daily_discovered():
 
 @app.route('/api/stock/<symbol>', methods=['GET'])
 def get_stock(symbol):
-    """Get detailed data for a specific stock - ALWAYS use Yahoo for historical charts"""
+    """Get detailed data for a specific stock - ONLY Interactive Brokers"""
     try:
         timeframe = request.args.get('timeframe', '5m')
         
-        # For timeframe requests, ALWAYS try Yahoo Finance first to get REAL historical data
-        # This ensures charts show actual price movement for different timeframes
-        logging.info(f"📊 Fetching {timeframe} chart data for {symbol} (forcing Yahoo for accurate history)")
+        # ONLY use Interactive Brokers - no fallbacks
+        logging.info(f"📊 Fetching {timeframe} chart data for {symbol} from Interactive Brokers ONLY")
         
-        try:
-            # Force Yahoo Finance for accurate historical data
-            stock_data = scanner._fetch_from_yahoo(symbol, timeframe)
-            if stock_data:
-                logging.info(f"✅ Got REAL {timeframe} historical data from Yahoo for {symbol} ({len(stock_data.get('candles', []))} candles)")
-                stock_data['source'] = 'Yahoo Finance (Real Historical Data)'
-                stock_data['isRealData'] = True
-                return jsonify({
-                    'success': True,
-                    'stock': stock_data
-                })
-        except Exception as e:
-            logging.warning(f"⚠️ Yahoo failed for {symbol} {timeframe}: {str(e)}")
-        
-        # Fallback to regular API priority if Yahoo fails
-        logging.info(f"🔄 Falling back to SerpAPI/Massive for {symbol} {timeframe}...")
         stock_data = scanner.get_stock_data(symbol, timeframe)
         
         if stock_data:
             candle_count = len(stock_data.get('candles', []))
-            logging.info(f"✅ Returned {timeframe} data for {symbol} with {candle_count} candles (SYNTHETIC - real data unavailable)")
-            stock_data['source'] = 'Fallback API (Synthetic Candles)'
-            stock_data['isRealData'] = False
+            logging.info(f"✅ Got {timeframe} data from IBKR for {symbol} ({candle_count} candles)")
+            stock_data['source'] = 'Interactive Brokers (Real Data)'
+            stock_data['isRealData'] = True
             return jsonify({
                 'success': True,
-                'stock': stock_data,
-                'warning': 'Using synthetic candles - real historical data unavailable'
+                'stock': stock_data
             })
         else:
-            logging.error(f"❌ No data available for {symbol} {timeframe}")
+            logging.error(f"❌ No data available from IBKR for {symbol} {timeframe}")
             return jsonify({
                 'success': False,
-                'error': 'Stock not found'
-            }), 404
+                'error': f'Interactive Brokers unavailable for {symbol}. Make sure TWS/IB Gateway is running and logged in.',
+                'help': f'1. Start TWS or IB Gateway\n2. Log in as {IBKR_USERNAME}\n3. Enable API: Configure > API > Settings\n4. Set port: {IBKR_PORT}'
+            }), 503
     except Exception as e:
         logging.error(f"❌ Error in get_stock endpoint: {str(e)}")
         return jsonify({
