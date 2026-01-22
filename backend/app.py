@@ -1990,6 +1990,16 @@ def get_stock(symbol):
         else:
             logging.info(f"📊 Fetching {timeframe} chart data for {symbol} from Interactive Brokers ONLY (Market OPEN, including yesterday: {include_yesterday})")
         
+        # Check IBKR connection first
+        if not IBKR_AVAILABLE or not connect_ibkr():
+            logging.error(f"❌ IBKR not connected - cannot fetch {symbol}")
+            return jsonify({
+                'success': False,
+                'error': f'Interactive Brokers is not connected. Make sure TWS/IB Gateway is running and logged in.',
+                'help': f'1. Start TWS or IB Gateway\n2. Log in as {IBKR_USERNAME}\n3. Enable API: Configure > API > Settings\n4. Set port: {IBKR_PORT}',
+                'marketStatus': 'CLOSED' if not market_open else 'UNKNOWN'
+            }), 503
+        
         stock_data = scanner.get_stock_data(symbol, timeframe)
         
         if stock_data:
@@ -2008,15 +2018,31 @@ def get_stock(symbol):
             logging.error(f"❌ No data available from IBKR for {symbol} {timeframe}")
             return jsonify({
                 'success': False,
-                'error': f'Interactive Brokers unavailable for {symbol}. Make sure TWS/IB Gateway is running and logged in.',
-                'help': f'1. Start TWS or IB Gateway\n2. Log in as {IBKR_USERNAME}\n3. Enable API: Configure > API > Settings\n4. Set port: {IBKR_PORT}',
+                'error': f'No data available for {symbol}. The symbol may not be tradeable through IBKR, or IBKR may not have market data for this symbol. Please verify the symbol is correct and try again.',
+                'help': f'1. Verify {symbol} is a valid stock symbol\n2. Check if {symbol} is tradeable through IBKR\n3. Ensure IBKR has market data subscription for {symbol}',
                 'marketStatus': 'CLOSED' if not market_open else 'UNKNOWN'
-            }), 503
+            }), 404
     except Exception as e:
-        logging.error(f"❌ Error in get_stock endpoint: {str(e)}")
+        error_msg = str(e)
+        logging.error(f"❌ Error in get_stock endpoint for {symbol}: {error_msg}")
+        
+        # Check for specific error types
+        if 'No security definition' in error_msg or 'Invalid symbol' in error_msg:
+            return jsonify({
+                'success': False,
+                'error': f'Symbol {symbol} not found or invalid. Please verify the symbol is correct.',
+                'help': f'1. Check if {symbol} is a valid stock symbol\n2. Try searching for a different symbol'
+            }), 404
+        elif 'timeout' in error_msg.lower() or 'timed out' in error_msg.lower():
+            return jsonify({
+                'success': False,
+                'error': f'Request timed out while fetching {symbol}. IBKR may be slow or the symbol may not be available. Please try again.',
+                'help': f'1. Wait a moment and try again\n2. Check if IBKR is connected\n3. Verify {symbol} is a valid symbol'
+            }), 504
+        
         return jsonify({
             'success': False,
-            'error': str(e)
+            'error': f'Error fetching {symbol}: {error_msg}'
         }), 500
 
 @app.route('/api/news/<symbol>', methods=['GET'])

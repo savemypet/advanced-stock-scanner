@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Toaster, toast } from 'sonner'
-import { Settings, TrendingUp, RefreshCw, Play, Pause } from 'lucide-react'
+import { Settings, TrendingUp, RefreshCw, Play, Pause, Search, X } from 'lucide-react'
 import StockScanner from './components/StockScanner'
 import SimulatedScanner from './components/SimulatedScanner'
 import SettingsPanel from './components/SettingsPanel'
 import StockDetailModal from './components/StockDetailModal'
 import NewsSection from './components/NewsSection'
-import { scanStocks } from './api/stockApi'
+import { scanStocks, getStock } from './api/stockApi'
 import { Stock, ScannerSettings } from './types'
 import { detectPatterns, getLatestSignal } from './utils/candlestickPatterns'
 import './App.css'
@@ -21,6 +21,8 @@ function App() {
   const [selectedStock, setSelectedStock] = useState<Stock | null>(null)
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
   const [countdown, setCountdown] = useState<number>(0)
+  const [searchSymbol, setSearchSymbol] = useState<string>('')
+  const [isSearching, setIsSearching] = useState<boolean>(false)
   // IBKR only mode - no rate limits, removed rate limit state
   const [refreshCooldown, setRefreshCooldown] = useState<number>(0)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
@@ -224,6 +226,57 @@ function App() {
     // No popup notifications - silent toggle
   }
 
+  const handleSearchStock = async () => {
+    if (!searchSymbol.trim()) {
+      toast.error('Please enter a stock symbol')
+      return
+    }
+
+    const symbol = searchSymbol.trim().toUpperCase()
+    setIsSearching(true)
+
+    // Show loading message with green indicator
+    const loadingToast = toast.loading(`🔍 Searching for ${symbol}... This may take 30-60 seconds.`, {
+      description: 'The search button will turn green while searching'
+    })
+
+    try {
+      const stock = await getStock(symbol, settings.chartTimeframe)
+      toast.dismiss(loadingToast)
+      setSelectedStock(stock)
+      setSearchSymbol('')
+      toast.success(`✅ Found ${symbol} - ${stock.name || symbol}`, {
+        description: `Price: $${stock.currentPrice} | Change: ${stock.changePercent?.toFixed(2)}%`
+      })
+    } catch (error: any) {
+      console.error('Error searching stock:', error)
+      toast.dismiss(loadingToast)
+      
+      // Provide more specific error messages
+      let errorMessage = `Could not find stock: ${symbol}`
+      
+      if (error.message?.includes('timeout') || error.code === 'ECONNABORTED') {
+        errorMessage = `Request timed out for ${symbol}. IBKR may be slow or the symbol may not be available. Try again or check if IBKR is connected.`
+      } else if (error.response?.data?.error) {
+        errorMessage = error.response.data.error
+      } else if (error.message) {
+        errorMessage = error.message
+      }
+      
+      toast.error(`❌ ${errorMessage}`, {
+        duration: 5000
+      })
+    } finally {
+      setIsSearching(false)
+    }
+  }
+
+  const handleSearchKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      handleSearchStock()
+    }
+  }
+
   // Removed formatCountdown - no rate limit countdown needed
 
   return (
@@ -235,6 +288,55 @@ function App() {
       {/* Header */}
       <header className="border-b border-border bg-card sticky top-0 z-40">
         <div className="container mx-auto px-3 sm:px-4 py-3 sm:py-4">
+          {/* Stock Search Bar - Top of page */}
+          <div className="mb-3 pb-3 border-b border-border">
+            <div className="flex items-center gap-2">
+              <div className="flex-1 relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <input
+                  type="text"
+                  value={searchSymbol}
+                  onChange={(e) => setSearchSymbol(e.target.value.toUpperCase())}
+                  onKeyPress={handleSearchKeyPress}
+                  placeholder="Search stock symbol (e.g., AAPL, TSLA, GME)..."
+                  className="w-full pl-10 pr-10 py-2 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                  disabled={isSearching}
+                />
+                {searchSymbol && (
+                  <button
+                    onClick={() => setSearchSymbol('')}
+                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    aria-label="Clear search"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+              <button
+                onClick={handleSearchStock}
+                disabled={isSearching || !searchSymbol.trim()}
+                className={`px-4 py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 ${
+                  isSearching 
+                    ? 'bg-green-500 text-white hover:bg-green-600' 
+                    : 'bg-primary text-primary-foreground hover:bg-primary/90'
+                }`}
+              >
+                {isSearching ? (
+                  <>
+                    <div className="w-2 h-2 rounded-full bg-white animate-pulse mr-1" />
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span className="hidden sm:inline">Searching {searchSymbol}...</span>
+                  </>
+                ) : (
+                  <>
+                    <Search className="w-4 h-4" />
+                    <span className="hidden sm:inline">Search</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
           {/* View Mode Tabs */}
           <div className="flex items-center gap-2 mb-3 pb-3 border-b border-border">
             <button

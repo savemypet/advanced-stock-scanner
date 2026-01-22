@@ -37,12 +37,21 @@ export const scanStocks = async (settings: ScannerSettings): Promise<ScanResult>
 export const getStock = async (symbol: string, timeframe: string): Promise<Stock> => {
   try {
     // IBKR only mode - use local backend
+    // Increased timeout for IBKR data fetching (can take 30-60 seconds)
     const response = await axios.get(`${API_BASE_URL}/stock/${symbol}`, {
-      params: { timeframe }
+      params: { timeframe },
+      timeout: 60000 // 60 second timeout for IBKR data fetching
     })
     return response.data.stock
-  } catch (error) {
+  } catch (error: any) {
     console.error(`Error fetching stock ${symbol}:`, error)
+    // Provide more helpful error messages
+    if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+      throw new Error(`Request timed out. IBKR may be fetching data for ${symbol}. Please try again or check IBKR connection.`)
+    }
+    if (error.response?.data?.error) {
+      throw new Error(error.response.data.error)
+    }
     throw error
   }
 }
