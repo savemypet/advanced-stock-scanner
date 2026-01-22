@@ -929,37 +929,121 @@ def is_premarket() -> bool:
         return False
 
 def fetch_realtime_ibkr(symbol: str) -> Dict[str, Any]:
-    """Fetch real-time stock data using reqMktData (FAST - 10-20 stocks per minute)"""
+    """Fetch near real-time stock data using 1-minute historical bars (works with Snapshot Bundle)"""
+    import time
+    fetch_start = time.time()
+    logging.info(f"📡 [IBKR REALTIME] Fetching near real-time data for {symbol}...")
+    
     if not IBKR_AVAILABLE:
+        logging.warning(f"⚠️ [IBKR REALTIME] [{symbol}] IBKR not available")
         return None
     
     if not connect_ibkr():
+        logging.warning(f"⚠️ [IBKR REALTIME] [{symbol}] IBKR not connected")
         return None
+    
+    logging.info(f"✅ [IBKR REALTIME] [{symbol}] IBKR connected, using 1-minute historical bars (Snapshot Bundle compatible)...")
     
     try:
         # Create stock contract
         contract = Stock(symbol, 'SMART', 'USD')
         
-        # Request real-time market data (FAST - fewer limits)
-        IBKR_INSTANCE.reqMktData(contract, '', False, False)
-        ticker = IBKR_INSTANCE.ticker(contract)
-        IBKR_INSTANCE.sleep(0.5)  # Wait for data (can be faster, 0.1-0.2s)
+        # Use 5-minute historical bars instead of streaming (works with Snapshot Bundle, faster)
+        # Get the most recent 5-minute bar which is close to real-time
+        logging.info(f"📡 [IBKR REALTIME] [{symbol}] Requesting 5-minute historical bars (faster than 1-min)...")
+        in_premarket = is_premarket()
+        use_rth = not in_premarket  # False during premarket to get premarket data
         
-        if not ticker.last and not ticker.bid:
-            logging.warning(f"⚠️ No real-time data for {symbol}")
+        bars = IBKR_INSTANCE.reqHistoricalData(
+            contract,
+            endDateTime='',
+            durationStr='1 D',  # Get 1 day of data (IBKR format)
+            barSizeSetting='5 mins',  # Use 5-minute bars (faster, less likely to timeout)
+            whatToShow='TRADES',
+            useRTH=use_rth
+        )
+        IBKR_INSTANCE.sleep(1.0)  # Wait longer for data (Snapshot Bundle may be slower)
+        
+        if not bars or len(bars) == 0:
+            logging.warning(f"⚠️ [IBKR REALTIME] [{symbol}] No 5-minute bars received")
             return None
         
-        # Get real-time prices
-        current_price = float(ticker.last) if ticker.last else None
-        bid_price = float(ticker.bid) if ticker.bid else None
-        ask_price = float(ticker.ask) if ticker.ask else None
-        spread = (ask_price - bid_price) if (bid_price and ask_price) else None
+        # Get the most recent bar (last one)
+        df = util.df(bars)
+        if df.empty:
+            logging.warning(f"⚠️ [IBKR REALTIME] [{symbol}] Empty dataframe from historical data")
+            return None
+        
+        # Use the most recent bar for current price
+        latest_bar = df.iloc[-1]
+        ticker_last = latest_bar['close']  # Use close of most recent 1-min bar
+        ticker_high = latest_bar['high']
+        ticker_low = latest_bar['low']
+        ticker_volume = latest_bar['volume']
+        
+        # For bid/ask, we'll use the close price as approximation (Snapshot Bundle doesn't provide streaming bid/ask)
+        ticker_bid = ticker_last
+        ticker_ask = ticker_last
+        
+        # Check if we have valid price data (not NaN)
+        import math
+        has_valid_price = (ticker_last and not math.isnan(float(ticker_last))) if ticker_last is not None else False
+        
+        if not has_valid_price:
+            elapsed = time.time() - fetch_start
+            logging.warning(f"⚠️ [IBKR REALTIME] [{symbol}] No valid price data after {elapsed:.2f}s")
+            return None
+        
+        elapsed = time.time() - fetch_start
+        logging.info(f"✅ [IBKR REALTIME] [{symbol}] Data received in {elapsed:.2f}s (from 5-minute bars)")
+        
+        # Safely log price data
+        price_str = f"${ticker_last:.2f}" if (ticker_last and not math.isnan(float(ticker_last))) else "N/A"
+        logging.info(f"📊 [IBKR REALTIME] [{symbol}] Price: {price_str} (from 5-min bar)")
+        
+        # Get real-time prices - handle NaN values
+        import math
+        
+        def safe_float(value):
+            """Safely convert to float, handling NaN"""
+            if value is None:
+                return None
+            try:
+                val = float(value)
+                if math.isnan(val) or math.isinf(val):
+                    return None
+                return val
+            except (ValueError, TypeError):
+                return None
+        
+        def safe_int(value):
+            """Safely convert to int, handling NaN"""
+            if value is None:
+                return None
+            try:
+                val = float(value)
+                if math.isnan(val) or math.isinf(val):
+                    return None
+                return int(val)
+            except (ValueError, TypeError):
+                return None
+        
+        current_price = safe_float(ticker_last) if ticker_last is not None else None
+        bid_price = safe_float(ticker_bid) if ticker_bid is not None else None
+        ask_price = safe_float(ticker_ask) if ticker_ask is not None else None
+        spread = (ask_price - bid_price) if (bid_price and ask_price and bid_price != ask_price) else None
         spread_percent = (spread / bid_price * 100) if (bid_price and spread and bid_price > 0) else None
         
-        # Get real-time volume and day stats
-        current_volume = int(ticker.volume) if ticker.volume else None
-        day_high = float(ticker.high) if ticker.high else None
-        day_low = float(ticker.low) if ticker.low else None
+        # Get volume and day stats from 1-minute bar
+        current_volume = safe_int(ticker_volume) if ticker_volume is not None else None
+        day_high = safe_float(ticker_high) if ticker_high is not None else None
+        day_low = safe_float(ticker_low) if ticker_low is not None else None
+        
+        # If we don't have a valid current price, we can't proceed
+        if current_price is None:
+            elapsed = time.time() - fetch_start
+            logging.warning(f"⚠️ [IBKR REALTIME] [{symbol}] No valid price data after {elapsed:.2f}s")
+            return None
         
         # Get contract details for name
         contract_details = IBKR_INSTANCE.reqContractDetails(contract)
@@ -983,20 +1067,23 @@ def fetch_realtime_ibkr(symbol: str) -> Dict[str, Any]:
             if bars and len(bars) > 0:
                 df = util.df(bars)
                 if not df.empty and len(df) > 0:
-                    previous_close = float(df['close'].iloc[-1]) if len(df) > 0 else current_price
+                    prev_close_val = safe_float_convert(df['close'].iloc[-1]) if len(df) > 0 else None
+                    previous_close = prev_close_val if prev_close_val else current_price
                 else:
                     previous_close = current_price
             else:
                 previous_close = current_price
-        except:
+        except Exception as e:
+            logging.warning(f"⚠️ [IBKR REALTIME] [{symbol}] Error getting previous close: {e}")
             previous_close = current_price
         
         change_amount = (current_price - previous_close) if (current_price and previous_close) else 0
         change_percent = (change_amount / previous_close * 100) if previous_close > 0 else 0
         
         market_open = is_market_open()
+        total_elapsed = time.time() - fetch_start
         
-        return {
+        result = {
             'symbol': symbol,
             'name': name,
             'currentPrice': round(current_price, 2) if current_price else None,
@@ -1021,11 +1108,18 @@ def fetch_realtime_ibkr(symbol: str) -> Dict[str, Any]:
             'hasBidAsk': bid_price is not None and ask_price is not None,
             'realtimeOnly': True,  # Flag to indicate this is real-time only
             'float': 0,  # Not available in real-time
-            'avgVolume': None,  # Would need historical data
-            'marketStatus': 'PREMARKET' if is_premarket() else ('OPEN' if market_open else 'CLOSED')
+            'avgVolume': None  # Would need historical data
         }
+        
+        logging.info(f"✅ [IBKR REALTIME] [{symbol}] Real-time data complete in {total_elapsed:.2f}s")
+        logging.info(f"📊 [IBKR REALTIME] [{symbol}] Final data: price=${result['currentPrice']}, change={result['changePercent']}%, volume={result['currentVolume']}")
+        
+        return result
     except Exception as e:
-        logging.error(f"❌ Error fetching real-time data for {symbol}: {e}")
+        import traceback
+        elapsed = time.time() - fetch_start
+        logging.error(f"❌ [IBKR REALTIME] [{symbol}] Error after {elapsed:.2f}s: {e}")
+        logging.error(f"❌ [IBKR REALTIME] [{symbol}] Traceback:\n{traceback.format_exc()}")
         return None
 
 def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
@@ -1113,31 +1207,83 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
         ticker = IBKR_INSTANCE.ticker(contract)
         IBKR_INSTANCE.sleep(1)  # Wait for data
         
-        current_price = float(ticker.last) if ticker.last else float(df['close'].iloc[-1])
-        previous_close = float(df['close'].iloc[0]) if len(df) > 0 else current_price
+        # Helper function to safely convert values, handling NaN
+        import math
+        def safe_float_convert(value, default=None):
+            """Safely convert to float, handling NaN"""
+            if value is None:
+                return default
+            try:
+                val = float(value)
+                if math.isnan(val) or math.isinf(val):
+                    return default
+                return val
+            except (ValueError, TypeError):
+                return default
+        
+        def safe_int_convert(value, default=None):
+            """Safely convert to int, handling NaN"""
+            if value is None:
+                return default
+            try:
+                val = float(value)
+                if math.isnan(val) or math.isinf(val):
+                    return default
+                return int(val)
+            except (ValueError, TypeError):
+                return default
+        
+        # Get current price - prefer ticker.last, fallback to historical close
+        ticker_price = safe_float_convert(ticker.last) if ticker.last else None
+        hist_close = safe_float_convert(df['close'].iloc[-1]) if len(df) > 0 else None
+        current_price = ticker_price if ticker_price else hist_close
+        
+        if current_price is None:
+            logging.error(f"❌ [IBKR] [{symbol}] No valid price data available")
+            return None
+        
+        previous_close = safe_float_convert(df['close'].iloc[0]) if len(df) > 0 else current_price
         
         # Get bid/ask spread data (if available)
-        bid_price = float(ticker.bid) if ticker.bid else None
-        ask_price = float(ticker.ask) if ticker.ask else None
+        bid_price = safe_float_convert(ticker.bid) if ticker.bid else None
+        ask_price = safe_float_convert(ticker.ask) if ticker.ask else None
         spread = (ask_price - bid_price) if (bid_price and ask_price) else None
         spread_percent = (spread / bid_price * 100) if (bid_price and spread and bid_price > 0) else None
         
         # Get real-time volume (current day)
-        current_volume = int(ticker.volume) if ticker.volume else None
-        day_high = float(ticker.high) if ticker.high else float(df['high'].max()) if len(df) > 0 else current_price
-        day_low = float(ticker.low) if ticker.low else float(df['low'].min()) if len(df) > 0 else current_price
+        current_volume = safe_int_convert(ticker.volume) if ticker.volume else None
+        ticker_high = safe_float_convert(ticker.high) if ticker.high else None
+        ticker_low = safe_float_convert(ticker.low) if ticker.low else None
+        hist_high = safe_float_convert(df['high'].max()) if len(df) > 0 else None
+        hist_low = safe_float_convert(df['low'].min()) if len(df) > 0 else None
+        day_high = ticker_high if ticker_high else (hist_high if hist_high else current_price)
+        day_low = ticker_low if ticker_low else (hist_low if hist_low else current_price)
         
-        # Convert to candles format
+        # Convert to candles format - handle NaN values
         candles = []
         for idx, row in df.iterrows():
-            candles.append({
-                'time': idx.isoformat() if hasattr(idx, 'isoformat') else str(idx),
-                'open': round(float(row['open']), 2),
-                'high': round(float(row['high']), 2),
-                'low': round(float(row['low']), 2),
-                'close': round(float(row['close']), 2),
-                'volume': int(row['volume'])
-            })
+            try:
+                open_val = safe_float_convert(row['open'], 0)
+                high_val = safe_float_convert(row['high'], 0)
+                low_val = safe_float_convert(row['low'], 0)
+                close_val = safe_float_convert(row['close'], 0)
+                vol_val = safe_int_convert(row['volume'], 0)
+                
+                # Skip candles with invalid data
+                if open_val == 0 and high_val == 0 and low_val == 0 and close_val == 0:
+                    continue
+                
+                candles.append({
+                    'time': idx.isoformat() if hasattr(idx, 'isoformat') else str(idx),
+                    'open': round(open_val, 2),
+                    'high': round(high_val, 2),
+                    'low': round(low_val, 2),
+                    'close': round(close_val, 2),
+                    'volume': vol_val
+                })
+            except Exception as e:
+                logging.warning(f"⚠️ [IBKR] [{symbol}] Error converting candle data: {e}")
+                continue
         
         change_amount = current_price - previous_close
         change_percent = (change_amount / previous_close * 100) if previous_close > 0 else 0
@@ -1172,14 +1318,28 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
                     df_24h = util.df(hist_24h)
                     if not df_24h.empty:
                         for idx, row in df_24h.iterrows():
-                            candles_24h.append({
-                                'time': idx.isoformat() if hasattr(idx, 'isoformat') else str(idx),
-                                'open': round(float(row['open']), 2),
-                                'high': round(float(row['high']), 2),
-                                'low': round(float(row['low']), 2),
-                                'close': round(float(row['close']), 2),
-                                'volume': int(row['volume'])
-                            })
+                            try:
+                                open_val = safe_float_convert(row['open'], 0)
+                                high_val = safe_float_convert(row['high'], 0)
+                                low_val = safe_float_convert(row['low'], 0)
+                                close_val = safe_float_convert(row['close'], 0)
+                                vol_val = safe_int_convert(row['volume'], 0)
+                                
+                                # Skip invalid candles
+                                if open_val == 0 and high_val == 0 and low_val == 0 and close_val == 0:
+                                    continue
+                                
+                                candles_24h.append({
+                                    'time': idx.isoformat() if hasattr(idx, 'isoformat') else str(idx),
+                                    'open': round(open_val, 2),
+                                    'high': round(high_val, 2),
+                                    'low': round(low_val, 2),
+                                    'close': round(close_val, 2),
+                                    'volume': vol_val
+                                })
+                            except Exception as e:
+                                logging.warning(f"⚠️ [IBKR] [{symbol}] Error converting 24h candle: {e}")
+                                continue
                         chart_data['24h'] = candles_24h
                         logging.info(f"✅ Added 24h data to {symbol} ({len(candles_24h)} candles)")
                     else:
@@ -1569,6 +1729,10 @@ class StockScanner:
     def filter_stocks(self, criteria: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Filter stocks based on criteria and auto-discover new symbols"""
         global active_symbols
+        import time
+        filter_start = time.time()
+        
+        logging.info(f"🔍 [SCANNER] ===== FILTER_STOCKS START =====")
         
         min_price = criteria.get('minPrice', self.min_price)
         max_price = criteria.get('maxPrice', self.max_price)
@@ -1578,26 +1742,48 @@ class StockScanner:
         timeframe = criteria.get('chartTimeframe', '5m')
         display_count = criteria.get('displayCount', 5)
         
+        logging.info(f"🔍 [SCANNER] Filter criteria:")
+        logging.info(f"   - Price: ${min_price} - ${max_price}")
+        logging.info(f"   - Max Float: {max_float:,}")
+        logging.info(f"   - Min Gain: {min_gain}%")
+        logging.info(f"   - Volume Multiplier: {vol_multiplier}x")
+        logging.info(f"   - Timeframe: {timeframe}")
+        logging.info(f"   - Display Count: {display_count}")
+        
         # Build scan list: SMART SCALING based on API availability
         import random
         with active_symbols_lock:
             scan_symbols = list(active_symbols)
         
+        # Limit to first 5 symbols to prevent timeouts (can be increased later)
+        if len(scan_symbols) > 5:
+            scan_symbols = scan_symbols[:5]
+            logging.info(f"🔍 [SCANNER] Limited scan to 5 symbols to prevent timeouts")
+        
+        logging.info(f"🔍 [SCANNER] Scanning {len(scan_symbols)} symbols: {', '.join(scan_symbols)}")
+        
         # IBKR ONLY MODE - No other APIs
+        logging.info(f"🔍 [SCANNER] Checking IBKR connection...")
         ibkr_available = IBKR_AVAILABLE and connect_ibkr()
         
         if not ibkr_available:
-            logging.error(f"❌ Interactive Brokers unavailable - cannot scan stocks")
+            logging.error(f"❌ [SCANNER] Interactive Brokers unavailable - cannot scan stocks")
             logging.error(f"💡 Make sure TWS/IB Gateway is running and logged in as {IBKR_USERNAME}")
             return []
         
+        logging.info(f"✅ [SCANNER] IBKR is connected and ready")
+        
         # OPTION 2: Real-time Screening (DEFAULT) - Fast, 10-20 stocks per minute
-        logging.info(f"🔍 Scanning {len(scan_symbols)} symbols using REAL-TIME screening (10-20 stocks/min)")
+        logging.info(f"🔍 [SCANNER] Starting REAL-TIME screening (10-20 stocks/min)")
         
         results = []
         newly_added = []
+        symbol_count = 0
         
         for symbol in scan_symbols:
+            symbol_count += 1
+            symbol_start = time.time()
+            logging.info(f"🔍 [SCANNER] [{symbol_count}/{len(scan_symbols)}] Processing {symbol}...")
             # Use real-time screening first (FAST - reqMktData)
             stock_data = fetch_realtime_ibkr(symbol)
             
@@ -1668,35 +1854,49 @@ class StockScanner:
                             stock_data['chartData']['24h'] = stock_data['candles']
             
             # Apply filters
+            logging.info(f"🔍 [SCANNER] [{symbol}] Applying filters...")
             price_check = stock_data.get('currentPrice') and min_price <= stock_data['currentPrice'] <= max_price
+            logging.info(f"🔍 [SCANNER] [{symbol}] Price check: ${stock_data.get('currentPrice')} in range ${min_price}-${max_price} = {price_check}")
             
             # Float check: Only apply if Massive returned float data (skip if no float from Massive)
             float_value = stock_data.get('float', 0)
             float_source = stock_data.get('floatSource')
             if float_value > 0 and float_source:  # Only check float if Massive actually returned it
                 float_check = float_value <= max_float
-                logging.debug(f"📊 {symbol}: Float check applied ({float_value:,} <= {max_float:,}) from {float_source}")
+                logging.info(f"🔍 [SCANNER] [{symbol}] Float check: {float_value:,} <= {max_float:,} = {float_check} (from {float_source})")
             else:
                 float_check = True  # Skip float filter if Massive didn't return float data
-                logging.debug(f"📊 {symbol}: Float check skipped (no float data from Massive)")
+                logging.info(f"🔍 [SCANNER] [{symbol}] Float check: SKIPPED (no float data from Massive)")
             
             gain_check = stock_data.get('changePercent', 0) >= min_gain
+            logging.info(f"🔍 [SCANNER] [{symbol}] Gain check: {stock_data.get('changePercent', 0)}% >= {min_gain}% = {gain_check}")
             
             # Volume check: skip if real-time only and no avgVolume, or check if available
             if is_realtime_only and stock_data.get('avgVolume') is None:
                 volume_check = True  # Pass volume check for real-time only (will fetch full data if passes other filters)
+                logging.info(f"🔍 [SCANNER] [{symbol}] Volume check: SKIPPED (real-time only, no avgVolume)")
             else:
                 avg_vol = stock_data.get('avgVolume', 0) or 0
                 current_vol = stock_data.get('volume', 0) or stock_data.get('currentVolume', 0) or 0
                 volume_check = current_vol >= (avg_vol * vol_multiplier) if avg_vol > 0 else True
+                logging.info(f"🔍 [SCANNER] [{symbol}] Volume check: {current_vol:,} >= {avg_vol:,} * {vol_multiplier} = {volume_check}")
             
-            if price_check and float_check and gain_check and volume_check:
+            all_checks = price_check and float_check and gain_check and volume_check
+            logging.info(f"🔍 [SCANNER] [{symbol}] All filters: price={price_check}, float={float_check}, gain={gain_check}, volume={volume_check} = {all_checks}")
+            
+            if all_checks:
+                symbol_elapsed = time.time() - symbol_start
+                logging.info(f"✅ [SCANNER] [{symbol}] QUALIFIED! (took {symbol_elapsed:.2f}s)")
+                logging.info(f"✅ [SCANNER] [{symbol}] Stock data: {stock_data['name']}, ${stock_data.get('currentPrice')}, {stock_data.get('changePercent')}%")
+                
                 # Stock qualifies! Add to active symbols if new
                 with active_symbols_lock:
                     if symbol not in active_symbols:
                         active_symbols.add(symbol)
                         newly_added.append(symbol)
-                        logging.info(f"🆕 NEW MOVER DISCOVERED: {symbol} - {stock_data['name']} (+{stock_data['changePercent']:.2f}%)")
+                        logging.info(f"🆕 [SCANNER] NEW MOVER DISCOVERED: {symbol} - {stock_data['name']} (+{stock_data['changePercent']:.2f}%)")
+                    else:
+                        logging.info(f"✅ [SCANNER] [{symbol}] Already in active symbols list")
                 
                 # Calculate signal
                 if stock_data['changePercent'] > 15 and stock_data['volume'] > stock_data['avgVolume'] * 3:
@@ -1725,18 +1925,29 @@ class StockScanner:
                 stock_data['has24hData'] = '24h' in stock_data.get('chartData', {}) and len(stock_data['chartData'].get('24h', [])) > 0
                 
                 results.append(stock_data)
+            else:
+                symbol_elapsed = time.time() - symbol_start
+                logging.info(f"❌ [SCANNER] [{symbol}] Did not qualify (took {symbol_elapsed:.2f}s)")
         
         # Sort by change percent (highest first)
         results.sort(key=lambda x: x['changePercent'], reverse=True)
         
         # Log summary
+        total_elapsed = time.time() - filter_start
         with active_symbols_lock:
             total_active = len(active_symbols)
         
+        logging.info(f"🔍 [SCANNER] ===== FILTER_STOCKS COMPLETE =====")
+        logging.info(f"🔍 [SCANNER] Total time: {total_elapsed:.2f}s")
+        logging.info(f"🔍 [SCANNER] Symbols processed: {len(scan_symbols)}")
+        logging.info(f"🔍 [SCANNER] Stocks qualified: {len(results)}")
+        logging.info(f"🔍 [SCANNER] New symbols added: {len(newly_added)}")
+        logging.info(f"🔍 [SCANNER] Total active symbols: {total_active}")
+        
         if newly_added:
-            logging.info(f"🎯 Scan complete: {len(results)} qualifying stocks | {len(newly_added)} NEW symbols added: {', '.join(newly_added)}")
+            logging.info(f"🎯 [SCANNER] Scan complete: {len(results)} qualifying stocks | {len(newly_added)} NEW symbols added: {', '.join(newly_added)}")
         else:
-            logging.info(f"🎯 Scan complete: {len(results)} qualifying stocks | Total active symbols: {total_active}")
+            logging.info(f"🎯 [SCANNER] Scan complete: {len(results)} qualifying stocks | Total active symbols: {total_active}")
         
         return results[:display_count]
 
@@ -1746,10 +1957,27 @@ scanner = StockScanner()
 def scan_stocks():
     """Scan stocks with given criteria"""
     global daily_discovered_stocks, daily_discovered_date
+    import time
+    scan_start = time.time()
+    
+    logging.info(f"🔍 [SCANNER API] ===== SCAN REQUEST RECEIVED =====")
     
     try:
         criteria = request.json
+        logging.info(f"🔍 [SCANNER API] Scan criteria received:")
+        logging.info(f"   - minPrice: {criteria.get('minPrice')}")
+        logging.info(f"   - maxPrice: {criteria.get('maxPrice')}")
+        logging.info(f"   - maxFloat: {criteria.get('maxFloat')}")
+        logging.info(f"   - minGainPercent: {criteria.get('minGainPercent')}")
+        logging.info(f"   - volumeMultiplier: {criteria.get('volumeMultiplier')}")
+        logging.info(f"   - displayCount: {criteria.get('displayCount')}")
+        logging.info(f"   - chartTimeframe: {criteria.get('chartTimeframe')}")
+        
+        logging.info(f"🔍 [SCANNER API] Calling scanner.filter_stocks()...")
+        filter_start = time.time()
         results = scanner.filter_stocks(criteria)
+        filter_elapsed = time.time() - filter_start
+        logging.info(f"✅ [SCANNER API] filter_stocks completed in {filter_elapsed:.2f}s, returned {len(results)} stocks")
         
         # Track daily discovered stocks for demo learning
         with daily_discovered_lock:
@@ -1797,6 +2025,10 @@ def scan_stocks():
         # IBKR ONLY MODE - API Status
         ibkr_connected = IBKR_AVAILABLE and IBKR_CONNECTED and (IBKR_INSTANCE and IBKR_INSTANCE.isConnected() if IBKR_INSTANCE else False)
         
+        total_elapsed = time.time() - scan_start
+        logging.info(f"✅ [SCANNER API] Scan completed in {total_elapsed:.2f}s")
+        logging.info(f"✅ [SCANNER API] Returning {len(results)} stocks to frontend")
+        
         api_status = {
             'activeSource': 'Interactive Brokers (Real-time Screening)' if ibkr_connected else 'Not Connected',
             'ibkrConnected': ibkr_connected,
@@ -1812,6 +2044,9 @@ def scan_stocks():
             'method': 'reqMktData (real-time quotes)'
         }
         
+        logging.info(f"✅ [SCANNER API] IBKR Status: connected={ibkr_connected}, port={IBKR_PORT}")
+        logging.info(f"✅ [SCANNER API] ===== SCAN REQUEST SUCCESS =====")
+        
         return jsonify({
             'success': True,
             'stocks': results,
@@ -1819,8 +2054,12 @@ def scan_stocks():
             'apiStatus': api_status
         })
     except Exception as e:
+        import traceback
         error_msg = str(e)
-        logging.error(f"Error in scan: {error_msg}")
+        total_elapsed = time.time() - scan_start
+        logging.error(f"❌ [SCANNER API] ===== SCAN REQUEST ERROR =====")
+        logging.error(f"❌ [SCANNER API] Error after {total_elapsed:.2f}s: {error_msg}")
+        logging.error(f"❌ [SCANNER API] Full traceback:\n{traceback.format_exc()}")
         
         # Rate limit errors removed - IBKR only mode has no rate limits
         # No rate limit checking needed
@@ -1979,10 +2218,17 @@ def get_daily_discovered():
 @app.route('/api/stock/<symbol>', methods=['GET'])
 def get_stock(symbol):
     """Get detailed data for a specific stock - ONLY Interactive Brokers (includes yesterday's data)"""
+    import time
+    request_start = time.time()
+    logging.info(f"🔍 [SEARCH API] ===== NEW SEARCH REQUEST =====")
+    logging.info(f"🔍 [SEARCH API] Received request for symbol: {symbol}")
+    
     try:
         timeframe = request.args.get('timeframe', '5m')
         include_yesterday = request.args.get('includeYesterday', 'true').lower() == 'true'
         market_open = is_market_open()
+        
+        logging.info(f"🔍 [SEARCH API] Request params: timeframe={timeframe}, market_open={market_open}")
         
         # ONLY use Interactive Brokers - no fallbacks
         if not market_open:
@@ -1991,8 +2237,20 @@ def get_stock(symbol):
             logging.info(f"📊 Fetching {timeframe} chart data for {symbol} from Interactive Brokers ONLY (Market OPEN, including yesterday: {include_yesterday})")
         
         # Check IBKR connection first
-        if not IBKR_AVAILABLE or not connect_ibkr():
-            logging.error(f"❌ IBKR not connected - cannot fetch {symbol}")
+        logging.info(f"🔍 [SEARCH API] Checking IBKR connection for {symbol}...")
+        logging.info(f"🔍 [SEARCH API] IBKR_AVAILABLE: {IBKR_AVAILABLE}, IBKR_CONNECTED: {IBKR_CONNECTED}")
+        
+        if not IBKR_AVAILABLE:
+            logging.error(f"❌ [SEARCH API] IBKR not available - cannot fetch {symbol}")
+            return jsonify({
+                'success': False,
+                'error': f'Interactive Brokers API not available. Install ib-insync: pip install ib-insync',
+                'help': f'1. Install ib-insync: pip install ib-insync\n2. Restart the backend',
+                'marketStatus': 'CLOSED' if not market_open else 'UNKNOWN'
+            }), 503
+        
+        if not connect_ibkr():
+            logging.error(f"❌ [SEARCH API] IBKR not connected - cannot fetch {symbol}")
             return jsonify({
                 'success': False,
                 'error': f'Interactive Brokers is not connected. Make sure TWS/IB Gateway is running and logged in.',
@@ -2000,22 +2258,35 @@ def get_stock(symbol):
                 'marketStatus': 'CLOSED' if not market_open else 'UNKNOWN'
             }), 503
         
+        logging.info(f"✅ [SEARCH API] IBKR is connected, fetching stock data for {symbol}...")
+        import time
+        fetch_start = time.time()
         stock_data = scanner.get_stock_data(symbol, timeframe)
+        fetch_elapsed = time.time() - fetch_start
+        logging.info(f"⏱️ [SEARCH API] Stock data fetch took {fetch_elapsed:.2f} seconds for {symbol}")
         
         if stock_data:
             candle_count = len(stock_data.get('candles', []))
             market_status = stock_data.get('marketStatus', 'PREMARKET' if is_premarket() else ('OPEN' if market_open else 'CLOSED'))
-            logging.info(f"✅ Got {timeframe} data from IBKR for {symbol} ({candle_count} candles, Market: {market_status})")
+            total_elapsed = time.time() - request_start
+            logging.info(f"✅ [SEARCH API] Got {timeframe} data from IBKR for {symbol} ({candle_count} candles, Market: {market_status})")
+            logging.info(f"✅ [SEARCH API] Total request time: {total_elapsed:.2f} seconds")
+            logging.info(f"✅ [SEARCH API] Stock data keys: {list(stock_data.keys())}")
             stock_data['source'] = 'Interactive Brokers (Real Data)'
             stock_data['isRealData'] = True
             stock_data['marketStatus'] = market_status
-            return jsonify({
+            
+            response_data = {
                 'success': True,
                 'stock': stock_data,
                 'marketStatus': market_status
-            })
+            }
+            logging.info(f"✅ [SEARCH API] Returning success response for {symbol}")
+            return jsonify(response_data)
         else:
-            logging.error(f"❌ No data available from IBKR for {symbol} {timeframe}")
+            total_elapsed = time.time() - request_start
+            logging.error(f"❌ [SEARCH API] No data available from IBKR for {symbol} {timeframe} (took {total_elapsed:.2f}s)")
+            logging.error(f"❌ [SEARCH API] scanner.get_stock_data returned None")
             return jsonify({
                 'success': False,
                 'error': f'No data available for {symbol}. The symbol may not be tradeable through IBKR, or IBKR may not have market data for this symbol. Please verify the symbol is correct and try again.',
@@ -2024,22 +2295,28 @@ def get_stock(symbol):
             }), 404
     except Exception as e:
         error_msg = str(e)
-        logging.error(f"❌ Error in get_stock endpoint for {symbol}: {error_msg}")
+        total_elapsed = time.time() - request_start
+        logging.error(f"❌ [SEARCH API] Error in get_stock endpoint for {symbol} after {total_elapsed:.2f}s: {error_msg}")
+        import traceback
+        logging.error(f"❌ [SEARCH API] Full traceback:\n{traceback.format_exc()}")
         
         # Check for specific error types
         if 'No security definition' in error_msg or 'Invalid symbol' in error_msg:
+            logging.error(f"❌ [SEARCH API] Invalid symbol error for {symbol}")
             return jsonify({
                 'success': False,
                 'error': f'Symbol {symbol} not found or invalid. Please verify the symbol is correct.',
                 'help': f'1. Check if {symbol} is a valid stock symbol\n2. Try searching for a different symbol'
             }), 404
         elif 'timeout' in error_msg.lower() or 'timed out' in error_msg.lower():
+            logging.error(f"❌ [SEARCH API] Timeout error for {symbol}")
             return jsonify({
                 'success': False,
                 'error': f'Request timed out while fetching {symbol}. IBKR may be slow or the symbol may not be available. Please try again.',
                 'help': f'1. Wait a moment and try again\n2. Check if IBKR is connected\n3. Verify {symbol} is a valid symbol'
             }), 504
         
+        logging.error(f"❌ [SEARCH API] Generic error for {symbol}: {error_msg}")
         return jsonify({
             'success': False,
             'error': f'Error fetching {symbol}: {error_msg}'
@@ -2174,9 +2451,15 @@ def preload_stocks():
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    """Health check endpoint"""
+    """Health check endpoint with detailed connection info"""
+    ibkr_connected = IBKR_AVAILABLE and IBKR_CONNECTED and (IBKR_INSTANCE and IBKR_INSTANCE.isConnected() if IBKR_INSTANCE else False)
     return jsonify({
         'status': 'healthy',
+        'ibkrAvailable': IBKR_AVAILABLE,
+        'ibkrConnected': ibkr_connected,
+        'ibkrHost': IBKR_HOST,
+        'ibkrPort': IBKR_PORT,
+        'ibkrUsername': IBKR_USERNAME,
         'timestamp': datetime.now().isoformat()
     })
 

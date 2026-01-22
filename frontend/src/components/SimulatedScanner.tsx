@@ -15,6 +15,29 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
   const [isLiveMode, setIsLiveMode] = useState(true)
   const [isLoading, setIsLoading] = useState(true)
 
+  // Update simulatedStocks when liveStocks prop changes (from scanner)
+  useEffect(() => {
+    if (liveStocks && liveStocks.length > 0) {
+      console.log(`📊 [SIMULATED] Received ${liveStocks.length} stocks from live scanner`)
+      // Merge live stocks with existing simulated stocks (avoid duplicates)
+      setSimulatedStocks(prev => {
+        const existingSymbols = new Set(prev.map(s => s.symbol))
+        const newStocks = liveStocks.filter(s => !existingSymbols.has(s.symbol))
+        if (newStocks.length > 0) {
+          console.log(`📊 [SIMULATED] Adding ${newStocks.length} new stocks from scanner: ${newStocks.map(s => s.symbol).join(', ')}`)
+          return [...prev, ...newStocks]
+        }
+        // Update existing stocks with fresh data
+        const updated = prev.map(existing => {
+          const fresh = liveStocks.find(s => s.symbol === existing.symbol)
+          return fresh || existing
+        })
+        return updated
+      })
+      setIsLoading(false)
+    }
+  }, [liveStocks])
+
   // Fetch ONLY stocks discovered by the scanner (AI learning from scanner picks only)
   useEffect(() => {
     const fetchDailyStocks = async () => {

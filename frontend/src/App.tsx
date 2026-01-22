@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Toaster, toast } from 'sonner'
-import { Settings, TrendingUp, RefreshCw, Play, Pause, Search, X } from 'lucide-react'
+import { Settings, TrendingUp, RefreshCw, Play, Pause, Search, X, Activity } from 'lucide-react'
 import StockScanner from './components/StockScanner'
 import SimulatedScanner from './components/SimulatedScanner'
 import SettingsPanel from './components/SettingsPanel'
 import StockDetailModal from './components/StockDetailModal'
 import NewsSection from './components/NewsSection'
+import ConnectionLog from './components/ConnectionLog'
 import { scanStocks, getStock } from './api/stockApi'
 import { Stock, ScannerSettings } from './types'
 import { detectPatterns, getLatestSignal } from './utils/candlestickPatterns'
@@ -14,7 +15,7 @@ import './App.css'
 type ViewMode = 'live' | 'simulated'
 
 function App() {
-  const [viewMode, setViewMode] = useState<ViewMode>('simulated') // Start on simulated for demo
+  const [viewMode, setViewMode] = useState<ViewMode>('live') // Start on live mode to show real stocks
   const [stocks, setStocks] = useState<Stock[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
@@ -23,6 +24,7 @@ function App() {
   const [countdown, setCountdown] = useState<number>(0)
   const [searchSymbol, setSearchSymbol] = useState<string>('')
   const [isSearching, setIsSearching] = useState<boolean>(false)
+  const [showConnectionLog, setShowConnectionLog] = useState<boolean>(false)
   // IBKR only mode - no rate limits, removed rate limit state
   const [refreshCooldown, setRefreshCooldown] = useState<number>(0)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
@@ -41,7 +43,7 @@ function App() {
     chartTimeframe: '5m',
     autoAdd: true,
     realTimeUpdates: true, // AUTO-SCAN ENABLED - dynamically adjusts to API availability
-    updateInterval: 12, // 12 seconds - update interval
+    updateInterval: 60, // 60 seconds - optimal scan interval (based on ~30s average scan time)
     notificationsEnabled: true,
     notifyOnNewStocks: true,
     // API Selection - Default: Yahoo only (most reliable)
@@ -60,11 +62,33 @@ function App() {
 
   const performScan = useCallback(async () => {
     // IBKR only mode - no rate limits, always allow scanning
+    const scanStart = Date.now()
+    console.log(`🔍 [SCANNER] ===== SCAN STARTED =====`)
+    console.log(`🔍 [SCANNER] Scan criteria:`, {
+      minPrice: settings.minPrice,
+      maxPrice: settings.maxPrice,
+      maxFloat: settings.maxFloat,
+      minGainPercent: settings.minGainPercent,
+      volumeMultiplier: settings.volumeMultiplier,
+      displayCount: settings.displayCount,
+      timeframe: settings.chartTimeframe
+    })
+    
     try {
+      console.log(`📡 [SCANNER] Calling scanStocks API...`)
       const result = await scanStocks(settings)
+      const scanElapsed = ((Date.now() - scanStart) / 1000).toFixed(1)
+      
+      console.log(`📡 [SCANNER] API response received in ${scanElapsed}s`)
+      console.log(`📡 [SCANNER] Response:`, {
+        success: result.success,
+        stocksCount: result.stocks?.length || 0,
+        apiStatus: result.apiStatus
+      })
       
       if (result.success) {
         const newStocks = result.stocks || []
+        console.log(`✅ [SCANNER] Got ${newStocks.length} stocks from scan`)
         
         // 🧠 AI PATTERN DETECTION: Analyze candlestick patterns on real stocks
         const stocksWithPatterns = newStocks.map(stock => {
@@ -126,21 +150,36 @@ function App() {
           previousStocksRef.current = currentSymbols
         }
         
+        console.log(`✅ [SCANNER] Processed ${stocksWithPatterns.length} stocks with patterns`)
+        console.log(`✅ [SCANNER] Setting stocks state and updating UI`)
         setStocks(stocksWithPatterns)
+        // Also feed stocks to simulated section (both sections share the same stocks)
         setLastUpdate(new Date())
+        const totalElapsed = ((Date.now() - scanStart) / 1000).toFixed(1)
+        console.log(`✅ [SCANNER] ===== SCAN COMPLETE ===== (${totalElapsed}s total)`)
       } else {
         // Handle failed scan (e.g., timeout)
-        console.warn('Scan failed:', result.error || 'Unknown error')
+        const totalElapsed = ((Date.now() - scanStart) / 1000).toFixed(1)
+        console.warn(`⚠️ [SCANNER] Scan failed after ${totalElapsed}s:`, result.error || 'Unknown error')
+        console.warn(`⚠️ [SCANNER] API Status:`, result.apiStatus)
         // Keep existing stocks, don't clear them on timeout
       }
     } catch (error: any) {
-      console.error('Scan error:', error)
+      const totalElapsed = ((Date.now() - scanStart) / 1000).toFixed(1)
+      console.error(`❌ [SCANNER] ===== SCAN ERROR =====`)
+      console.error(`❌ [SCANNER] Error after ${totalElapsed}s:`, error)
+      console.error(`❌ [SCANNER] Error details:`, {
+        message: error.message,
+        code: error.code,
+        response: error.response?.data
+      })
       // IBKR only mode - log error but don't show popup
       // Errors are logged to console for debugging
       // Keep existing stocks on error
     } finally {
       // Always reset loading state, even on timeout/error
       setIsLoading(false)
+      console.log(`🏁 [SCANNER] Scan finished, loading state reset`)
     }
   }, [settings])
 
@@ -228,11 +267,14 @@ function App() {
 
   const handleSearchStock = async () => {
     if (!searchSymbol.trim()) {
+      console.log('❌ Search: No symbol entered')
       toast.error('Please enter a stock symbol')
       return
     }
 
     const symbol = searchSymbol.trim().toUpperCase()
+    console.log(`🔍 [SEARCH START] Searching for: ${symbol}`)
+    console.log(`🔍 [SEARCH] Timeframe: ${settings.chartTimeframe}`)
     setIsSearching(true)
 
     // Show loading message with green indicator
@@ -240,16 +282,38 @@ function App() {
       description: 'The search button will turn green while searching'
     })
 
+    const startTime = Date.now()
     try {
+      console.log(`📡 [SEARCH] Calling getStock API for ${symbol}...`)
       const stock = await getStock(symbol, settings.chartTimeframe)
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+      console.log(`✅ [SEARCH SUCCESS] Got stock data for ${symbol} in ${elapsed}s`)
+      console.log(`📊 [SEARCH] Stock data:`, {
+        symbol: stock.symbol,
+        name: stock.name,
+        price: stock.currentPrice,
+        change: stock.changePercent,
+        candles: stock.candles?.length || 0,
+        chartData: Object.keys(stock.chartData || {})
+      })
+      
       toast.dismiss(loadingToast)
+      console.log(`🎯 [SEARCH] Setting selectedStock and opening modal`)
       setSelectedStock(stock)
       setSearchSymbol('')
       toast.success(`✅ Found ${symbol} - ${stock.name || symbol}`, {
         description: `Price: $${stock.currentPrice} | Change: ${stock.changePercent?.toFixed(2)}%`
       })
+      console.log(`✅ [SEARCH COMPLETE] Modal should now be open`)
     } catch (error: any) {
-      console.error('Error searching stock:', error)
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+      console.error(`❌ [SEARCH ERROR] Failed after ${elapsed}s:`, error)
+      console.error(`❌ [SEARCH ERROR] Error details:`, {
+        message: error.message,
+        code: error.code,
+        response: error.response?.data,
+        status: error.response?.status
+      })
       toast.dismiss(loadingToast)
       
       // Provide more specific error messages
@@ -257,10 +321,13 @@ function App() {
       
       if (error.message?.includes('timeout') || error.code === 'ECONNABORTED') {
         errorMessage = `Request timed out for ${symbol}. IBKR may be slow or the symbol may not be available. Try again or check if IBKR is connected.`
+        console.log(`⏱️ [SEARCH] Timeout error - IBKR may be slow`)
       } else if (error.response?.data?.error) {
         errorMessage = error.response.data.error
+        console.log(`❌ [SEARCH] Backend error:`, error.response.data.error)
       } else if (error.message) {
         errorMessage = error.message
+        console.log(`❌ [SEARCH] Error message:`, error.message)
       }
       
       toast.error(`❌ ${errorMessage}`, {
@@ -268,6 +335,7 @@ function App() {
       })
     } finally {
       setIsSearching(false)
+      console.log(`🏁 [SEARCH END] Search completed for ${symbol}`)
     }
   }
 
@@ -280,7 +348,7 @@ function App() {
   // Removed formatCountdown - no rate limit countdown needed
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="min-h-screen bg-background text-foreground pb-20">
       <Toaster position="top-right" richColors />
       
       {/* IBKR only mode - no rate limit banners */}
@@ -447,6 +515,21 @@ function App() {
               </div>
             )}
             
+            {/* Connection Log Button - Always visible */}
+            <button
+              onClick={() => setShowConnectionLog(!showConnectionLog)}
+              className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-lg transition-colors ${
+                showConnectionLog 
+                  ? 'bg-green-500/20 text-green-500 hover:bg-green-500/30' 
+                  : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'
+              }`}
+              aria-label="Connection Log"
+              title="Show IBKR connection log"
+            >
+              <Activity className="w-4 h-4" />
+              <span className="hidden sm:inline">Log</span>
+            </button>
+
             {/* Settings Button - Always visible */}
             <button
               onClick={() => setShowSettings(!showSettings)}
@@ -514,6 +597,12 @@ function App() {
           onClose={() => setSelectedStock(null)} 
         />
       )}
+
+      {/* Connection Log Panel */}
+      <ConnectionLog 
+        isOpen={showConnectionLog} 
+        onToggle={() => setShowConnectionLog(!showConnectionLog)} 
+      />
     </div>
   )
 }
