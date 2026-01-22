@@ -810,6 +810,37 @@ def connect_ibkr():
             IBKR_CONNECTED = False
             return False
 
+def is_market_open() -> bool:
+    """Check if US stock market is currently open"""
+    from datetime import datetime, time
+    
+    try:
+        if pytz:
+            # US Eastern Time
+            et = pytz.timezone('US/Eastern')
+            now_et = datetime.now(et)
+            current_time = now_et.time()
+            current_day = now_et.weekday()  # 0=Monday, 6=Sunday
+        else:
+            # Fallback without pytz (less accurate)
+            now_et = datetime.now()
+            current_time = now_et.time()
+            current_day = now_et.weekday()
+        
+        # Market hours: 9:30 AM - 4:00 PM ET, Monday-Friday
+        market_open = time(9, 30)
+        market_close = time(16, 0)
+        
+        # Check if it's a weekday
+        if current_day >= 5:  # Saturday or Sunday
+            return False
+        
+        # Check if within market hours
+        return market_open <= current_time <= market_close
+    except Exception as e:
+        logging.warning(f"⚠️ Could not determine market status: {e}")
+        return True  # Assume open if can't determine
+
 def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
     """Fetch stock data from Interactive Brokers API (DEFAULT)"""
     if not IBKR_AVAILABLE:
@@ -817,6 +848,8 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
     
     if not connect_ibkr():
         return None
+    
+    market_open = is_market_open()
     
     try:
         # Map timeframe to IBKR duration and bar size
@@ -847,14 +880,18 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
         contract = Stock(symbol, 'SMART', 'USD')
         
         # Request historical data
-        logging.info(f"📊 Fetching {symbol} {timeframe} data from Interactive Brokers...")
+        if not market_open:
+            logging.info(f"📊 Market is CLOSED - Fetching historical data for {symbol} {timeframe}...")
+        else:
+            logging.info(f"📊 Fetching {symbol} {timeframe} data from Interactive Brokers (Market OPEN)...")
+        
         bars = IBKR_INSTANCE.reqHistoricalData(
             contract,
             endDateTime='',
             durationStr=duration,
             barSizeSetting=bar_size,
             whatToShow='TRADES',
-            useRTH=True  # Regular trading hours only
+            useRTH=market_open  # Only use regular trading hours if market is open
         )
         
         if not bars:
