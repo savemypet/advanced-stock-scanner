@@ -853,8 +853,107 @@ def is_market_open() -> bool:
         logging.error(traceback.format_exc())
         return False  # Assume closed if can't determine (safer)
 
+def fetch_realtime_ibkr(symbol: str) -> Dict[str, Any]:
+    """Fetch real-time stock data using reqMktData (FAST - 10-20 stocks per minute)"""
+    if not IBKR_AVAILABLE:
+        return None
+    
+    if not connect_ibkr():
+        return None
+    
+    try:
+        # Create stock contract
+        contract = Stock(symbol, 'SMART', 'USD')
+        
+        # Request real-time market data (FAST - fewer limits)
+        IBKR_INSTANCE.reqMktData(contract, '', False, False)
+        ticker = IBKR_INSTANCE.ticker(contract)
+        IBKR_INSTANCE.sleep(0.5)  # Wait for data (can be faster, 0.1-0.2s)
+        
+        if not ticker.last and not ticker.bid:
+            logging.warning(f"⚠️ No real-time data for {symbol}")
+            return None
+        
+        # Get real-time prices
+        current_price = float(ticker.last) if ticker.last else None
+        bid_price = float(ticker.bid) if ticker.bid else None
+        ask_price = float(ticker.ask) if ticker.ask else None
+        spread = (ask_price - bid_price) if (bid_price and ask_price) else None
+        spread_percent = (spread / bid_price * 100) if (bid_price and spread and bid_price > 0) else None
+        
+        # Get real-time volume and day stats
+        current_volume = int(ticker.volume) if ticker.volume else None
+        day_high = float(ticker.high) if ticker.high else None
+        day_low = float(ticker.low) if ticker.low else None
+        
+        # Get contract details for name
+        contract_details = IBKR_INSTANCE.reqContractDetails(contract)
+        name = symbol
+        if contract_details:
+            name = contract_details[0].longName if contract_details[0].longName else symbol
+        
+        # Calculate change (need previous close - use a small historical request or estimate)
+        # For fast screening, we'll use a minimal historical request for previous close
+        try:
+            bars = IBKR_INSTANCE.reqHistoricalData(
+                contract,
+                endDateTime='',
+                durationStr='1 D',
+                barSizeSetting='1 day',
+                whatToShow='TRADES',
+                useRTH=True
+            )
+            IBKR_INSTANCE.sleep(0.2)  # Quick wait
+            
+            if bars and len(bars) > 0:
+                df = util.df(bars)
+                if not df.empty and len(df) > 0:
+                    previous_close = float(df['close'].iloc[-1]) if len(df) > 0 else current_price
+                else:
+                    previous_close = current_price
+            else:
+                previous_close = current_price
+        except:
+            previous_close = current_price
+        
+        change_amount = (current_price - previous_close) if (current_price and previous_close) else 0
+        change_percent = (change_amount / previous_close * 100) if previous_close > 0 else 0
+        
+        market_open = is_market_open()
+        
+        return {
+            'symbol': symbol,
+            'name': name,
+            'currentPrice': round(current_price, 2) if current_price else None,
+            'previousClose': round(previous_close, 2) if previous_close else None,
+            'dayHigh': round(day_high, 2) if day_high else None,
+            'dayLow': round(day_low, 2) if day_low else None,
+            'currentVolume': current_volume,
+            'bidPrice': round(bid_price, 2) if bid_price else None,
+            'askPrice': round(ask_price, 2) if ask_price else None,
+            'spread': round(spread, 2) if spread else None,
+            'spreadPercent': round(spread_percent, 2) if spread_percent else None,
+            'changeAmount': round(change_amount, 2),
+            'changePercent': round(change_percent, 2),
+            'candles': [],  # No candles for real-time only
+            'chartData': {},  # Will be filled if historical data needed
+            'lastUpdated': datetime.now().isoformat(),
+            'signal': 'BUY' if change_percent > 3 else ('SELL' if change_percent < -3 else 'HOLD'),
+            'dataSource': 'Interactive Brokers',
+            'source': 'Interactive Brokers (Real-time Screening)',
+            'isRealData': True,
+            'marketStatus': 'OPEN' if market_open else 'CLOSED',
+            'hasBidAsk': bid_price is not None and ask_price is not None,
+            'realtimeOnly': True,  # Flag to indicate this is real-time only
+            'float': 0,  # Not available in real-time
+            'avgVolume': None  # Would need historical data
+        }
+    except Exception as e:
+        logging.error(f"❌ Error fetching real-time data for {symbol}: {e}")
+        return None
+
 def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
-    """Fetch stock data from Interactive Brokers API (DEFAULT)"""
+    """Fetch stock data from Interactive Brokers API (DEFAULT - Full historical data)"""
     if not IBKR_AVAILABLE:
         return None
     
@@ -1372,46 +1471,84 @@ class StockScanner:
             logging.error(f"💡 Make sure TWS/IB Gateway is running and logged in as {IBKR_USERNAME}")
             return []
         
-        logging.info(f"🔍 Scanning {len(scan_symbols)} symbols (API: Interactive Brokers ONLY)")
+        # OPTION 2: Real-time Screening (DEFAULT) - Fast, 10-20 stocks per minute
+        logging.info(f"🔍 Scanning {len(scan_symbols)} symbols using REAL-TIME screening (10-20 stocks/min)")
         
         results = []
         newly_added = []
         
         for symbol in scan_symbols:
-            # Get primary timeframe data (this already includes 24h data from get_stock_data)
-            stock_data = self.get_stock_data(symbol, timeframe)
+            # Use real-time screening first (FAST - reqMktData)
+            stock_data = fetch_realtime_ibkr(symbol)
+            
+            # If real-time fails, fall back to full historical data
+            if not stock_data:
+                logging.debug(f"⚠️ Real-time data unavailable for {symbol}, trying historical data...")
+                stock_data = self.get_stock_data(symbol, timeframe)
             
             if stock_data is None:
                 continue
             
-            # Ensure 24h data is ALWAYS included for AI study
-            if 'chartData' not in stock_data:
-                stock_data['chartData'] = {}
+            # For real-time only data, we need to handle volume differently
+            # Real-time doesn't have avgVolume, so we'll skip volume multiplier check for real-time
+            is_realtime_only = stock_data.get('realtimeOnly', False)
             
-            if '24h' not in stock_data['chartData']:
-                logging.info(f"📊 Ensuring 24h data for {symbol} (AI study requirement)...")
-                try:
-                    # Fetch 24h data specifically
-                    stock_24h = fetch_from_ibkr(symbol, '24h')
-                    if stock_24h and stock_24h.get('candles'):
-                        stock_data['chartData']['24h'] = stock_24h['candles']
-                        logging.info(f"✅ Added 24h data to {symbol} ({len(stock_24h['candles'])} candles)")
-                    else:
-                        # Use existing candles if available
+            # If real-time only and stock passes initial filters, fetch historical for full data
+            if is_realtime_only:
+                # Quick filter check first (price and gain only)
+                price_check = stock_data.get('currentPrice') and min_price <= stock_data['currentPrice'] <= max_price
+                gain_check = stock_data.get('changePercent', 0) >= min_gain
+                
+                # If passes quick filters, fetch full historical data for volume check
+                if price_check and gain_check:
+                    logging.info(f"📊 {symbol} passed real-time filters, fetching full data for volume check...")
+                    full_data = self.get_stock_data(symbol, timeframe)
+                    if full_data:
+                        # Merge real-time data with historical
+                        stock_data.update({
+                            'candles': full_data.get('candles', []),
+                            'chartData': full_data.get('chartData', {}),
+                            'volume': full_data.get('volume', 0),
+                            'avgVolume': full_data.get('avgVolume', 0),
+                            'float': full_data.get('float', 0),
+                            'realtimeOnly': False
+                        })
+                        # Ensure 24h data
+                        if '24h' not in stock_data.get('chartData', {}):
+                            if full_data.get('chartData', {}).get('24h'):
+                                stock_data['chartData']['24h'] = full_data['chartData']['24h']
+            
+            # Ensure 24h data is ALWAYS included for AI study (if not real-time only)
+            if not is_realtime_only:
+                if 'chartData' not in stock_data:
+                    stock_data['chartData'] = {}
+                
+                if '24h' not in stock_data['chartData']:
+                    logging.info(f"📊 Ensuring 24h data for {symbol} (AI study requirement)...")
+                    try:
+                        stock_24h = fetch_from_ibkr(symbol, '24h')
+                        if stock_24h and stock_24h.get('candles'):
+                            stock_data['chartData']['24h'] = stock_24h['candles']
+                            logging.info(f"✅ Added 24h data to {symbol} ({len(stock_24h['candles'])} candles)")
+                        elif stock_data.get('candles'):
+                            stock_data['chartData']['24h'] = stock_data['candles']
+                    except Exception as e:
+                        logging.warning(f"⚠️ Could not fetch 24h data for {symbol}: {e}")
                         if stock_data.get('candles'):
                             stock_data['chartData']['24h'] = stock_data['candles']
-                            logging.info(f"✅ Using existing candles as 24h data for {symbol}")
-                except Exception as e:
-                    logging.warning(f"⚠️ Could not fetch 24h data for {symbol}: {e}")
-                    # Still add existing candles if available
-                    if stock_data.get('candles'):
-                        stock_data['chartData']['24h'] = stock_data['candles']
             
             # Apply filters
-            price_check = min_price <= stock_data['currentPrice'] <= max_price
-            float_check = stock_data['float'] <= max_float
-            gain_check = stock_data['changePercent'] >= min_gain
-            volume_check = stock_data['volume'] >= (stock_data['avgVolume'] * vol_multiplier)
+            price_check = stock_data.get('currentPrice') and min_price <= stock_data['currentPrice'] <= max_price
+            float_check = stock_data.get('float', 0) <= max_float
+            gain_check = stock_data.get('changePercent', 0) >= min_gain
+            
+            # Volume check: skip if real-time only and no avgVolume, or check if available
+            if is_realtime_only and stock_data.get('avgVolume') is None:
+                volume_check = True  # Pass volume check for real-time only (will fetch full data if passes other filters)
+            else:
+                avg_vol = stock_data.get('avgVolume', 0) or 0
+                current_vol = stock_data.get('volume', 0) or stock_data.get('currentVolume', 0) or 0
+                volume_check = current_vol >= (avg_vol * vol_multiplier) if avg_vol > 0 else True
             
             if price_check and float_check and gain_check and volume_check:
                 # Stock qualifies! Add to active symbols if new
@@ -1520,14 +1657,16 @@ def scan_stocks():
         ibkr_connected = IBKR_AVAILABLE and IBKR_CONNECTED and (IBKR_INSTANCE and IBKR_INSTANCE.isConnected() if IBKR_INSTANCE else False)
         
         api_status = {
-            'activeSource': 'Interactive Brokers' if ibkr_connected else 'Not Connected',
+            'activeSource': 'Interactive Brokers (Real-time Screening)' if ibkr_connected else 'Not Connected',
             'ibkrConnected': ibkr_connected,
             'ibkrHost': IBKR_HOST,
             'ibkrPort': IBKR_PORT,
             'ibkrUsername': IBKR_USERNAME,
             'fallbackAvailable': False,  # No fallbacks - IBKR only
-            'recommendedInterval': 5,  # IBKR has no rate limits, can scan frequently
-            'mode': 'IBKR_ONLY'
+            'recommendedInterval': 3,  # Real-time screening: 10-20 stocks per minute
+            'mode': 'IBKR_REALTIME_SCREENING',  # Option 2: Real-time screening (default)
+            'scanSpeed': '10-20 stocks per minute',
+            'method': 'reqMktData (real-time quotes)'
         }
         
         return jsonify({
