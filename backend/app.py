@@ -1473,13 +1473,8 @@ def scan_stocks():
         error_msg = str(e)
         logging.error(f"Error in scan: {error_msg}")
         
-        # Check if it's a rate limit error
-        if "RATE_LIMIT_ERROR" in error_msg or "429" in error_msg or "Too Many Requests" in error_msg:
-            return jsonify({
-                'success': False,
-                'error': 'Rate limited by Yahoo Finance. Please wait.',
-                'rateLimited': True
-            }), 429
+        # Rate limit errors removed - IBKR only mode has no rate limits
+        # No rate limit checking needed
         
         return jsonify({
             'success': False,

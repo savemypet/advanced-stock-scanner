@@ -51,69 +51,16 @@ function App() {
     useMassive: false,
   })
 
-  // Check for saved rate limit on mount AND verify with backend
+  // IBKR only mode - no rate limits, clear any saved rate limit state
   useEffect(() => {
-    const checkLockoutStatus = async () => {
-      const savedRateLimitUntil = localStorage.getItem('rateLimitedUntil')
-      if (savedRateLimitUntil) {
-        const readyAt = new Date(savedRateLimitUntil)
-        const now = Date.now()
-        
-        // If still rate limited, restore the state
-        if (readyAt.getTime() > now) {
-          setRateLimited(true)
-          setReadyTime(readyAt)
-          console.log('Restored rate limit state from localStorage:', readyAt.toLocaleTimeString())
-        } else {
-          // Rate limit expired, clear localStorage
-          localStorage.removeItem('rateLimitedUntil')
-        }
-      }
-      
-      // ALWAYS check backend status on mount to see if ANY API is available
-      try {
-        const testScan = await scanStocks({
-          minPrice: 1,
-          maxPrice: 20,
-          maxFloat: 10000000,
-          minGainPercent: 100, // High threshold to get quick empty response
-          volumeMultiplier: 100,
-          chartTimeframe: '5m',
-          displayCount: 1
-        })
-        
-        // Check if ANY API is available (Massive, Yahoo, SerpAPI, or AlphaVantage)
-        if (testScan.apiStatus) {
-          const massiveAvailable = testScan.apiStatus.massiveRateLimit?.remaining > 0
-          const yahooAvailable = !testScan.apiStatus.yahooLocked
-          const serpapiAvailable = testScan.apiStatus.serpapiQuota?.remaining > 0
-          const alphavantageAvailable = testScan.apiStatus.alphavantageQuota?.remaining > 0
-          const anyApiAvailable = massiveAvailable || yahooAvailable || serpapiAvailable || alphavantageAvailable
-          
-          if (anyApiAvailable) {
-            console.log(`✅ Backend has working API (${testScan.apiStatus.activeSource}) - clearing frontend lockout`)
-            setRateLimited(false)
-            setReadyTime(null)
-            localStorage.removeItem('rateLimitedUntil')
-          } else {
-            console.warn('⚠️ All APIs exhausted on mount')
-          }
-        }
-      } catch (error) {
-        console.log('Backend status check failed:', error)
-      }
-    }
-    
-    checkLockoutStatus()
+    // Clear any old rate limit state (from previous API modes)
+    localStorage.removeItem('rateLimitedUntil')
+    setRateLimited(false)
+    setReadyTime(null)
   }, [])
 
   const performScan = useCallback(async () => {
-    // Prevent scanning if rate limited
-    if (rateLimited && readyCountdown > 0) {
-      console.log('Scan blocked - rate limited')
-      return
-    }
-    
+    // IBKR only mode - no rate limits, always allow scanning
     try {
       const result = await scanStocks(settings)
       
@@ -156,45 +103,10 @@ function App() {
           return stock
         })
         
-        // Check backend API status and update lockout state
-        if (result.apiStatus) {
-          // Check if ANY API is available (Massive, Yahoo, SerpAPI, or AlphaVantage)
-          const massiveAvailable = result.apiStatus.massiveRateLimit?.remaining > 0
-          const yahooAvailable = !result.apiStatus.yahooLocked
-          const serpapiAvailable = result.apiStatus.serpapiQuota?.remaining > 0
-          const alphavantageAvailable = result.apiStatus.alphavantageQuota?.remaining > 0
-          const anyApiAvailable = massiveAvailable || yahooAvailable || serpapiAvailable || alphavantageAvailable
-          
-          // SMART INTERVAL ADJUSTMENT: 20s with high-quota APIs, 60s with Massive.com only
-          if (result.apiStatus.recommendedInterval && result.apiStatus.recommendedInterval !== settings.updateInterval) {
-            const newInterval = result.apiStatus.recommendedInterval
-            const reason = newInterval === 20 
-              ? 'High-quota APIs available (Yahoo/SerpAPI/AlphaVantage)'
-              : 'Only Massive.com available (5/min limit)'
-            console.log(`🔄 Adjusting scan interval: ${settings.updateInterval}s → ${newInterval}s (${reason})`)
-            setSettings(prev => ({ ...prev, updateInterval: newInterval }))
-          }
-          
-          if (anyApiAvailable) {
-            // Clear frontend lockout - backend has at least one working API
-            setRateLimited(false)
-            setReadyTime(null)
-            localStorage.removeItem('rateLimitedUntil')
-            console.log(`✅ Backend using ${result.apiStatus.activeSource} - Frontend unlocked`)
-          } else {
-            // ALL APIs exhausted - Massive.com will refresh in 60 seconds max
-            console.warn('⚠️ All APIs temporarily exhausted - Massive.com refreshes in 60s')
-            setRateLimited(true)
-            const readyAt = new Date(Date.now() + 60 * 1000) // 60 seconds (Massive.com refresh)
-            setReadyTime(readyAt)
-            localStorage.setItem('rateLimitedUntil', readyAt.toISOString())
-          }
-        } else {
-          // Old API response format - clear rate limit if scan succeeded
-          setRateLimited(false)
-          setReadyTime(null)
-          localStorage.removeItem('rateLimitedUntil')
-        }
+        // IBKR only mode - no rate limits, always clear any rate limit state
+        setRateLimited(false)
+        setReadyTime(null)
+        localStorage.removeItem('rateLimitedUntil')
         
         // Check for new stocks
         if (settings.notificationsEnabled && settings.notifyOnNewStocks) {
@@ -230,46 +142,10 @@ function App() {
     } catch (error: any) {
       console.error('Scan error:', error)
       
-      // Check if it's a rate limit error
-      if (error?.isRateLimit || error?.message?.includes('429') || error?.message?.includes('Too Many Requests') || error?.message?.includes('Rate Limited')) {
-        // Check if error data includes API status
-        if (error?.apiStatus) {
-          const massiveAvailable = error.apiStatus.massiveRateLimit?.remaining > 0
-          const yahooAvailable = !error.apiStatus.yahooLocked
-          const serpapiAvailable = error.apiStatus.serpapiQuota?.remaining > 0
-          const alphavantageAvailable = error.apiStatus.alphavantageQuota?.remaining > 0
-          const anyApiAvailable = massiveAvailable || yahooAvailable || serpapiAvailable || alphavantageAvailable
-          
-          if (anyApiAvailable) {
-            // Fallback API available - don't lock frontend
-            toast.warning('API Switching', {
-              description: `Backend switched to ${error.apiStatus.activeSource}. Scanning continues!`,
-              duration: 5000
-            })
-          } else {
-            // ALL APIs temporarily exhausted - Massive.com refreshes in 60s
-            setRateLimited(true)
-            const readyAt = new Date(Date.now() + 60 * 1000) // 60 seconds (Massive.com refresh)
-            setReadyTime(readyAt)
-            localStorage.setItem('rateLimitedUntil', readyAt.toISOString())
-            
-            toast.warning('APIs Temporarily Exhausted', {
-              description: `Massive.com (5/min) will refresh in 60 seconds. Scanner will auto-resume!`,
-              duration: 8000
-            })
-          }
-        } else {
-          // No API status in error - assume temporary lockout
-          toast.warning('Rate Limit Detected', {
-            description: `Backend switching to fallback APIs. Scanner may continue working.`,
-            duration: 5000
-          })
-        }
-      } else {
-        toast.error('Failed to scan stocks', {
-          description: 'Please check your connection and try again'
-        })
-      }
+      // IBKR only mode - no rate limits, just show error
+      toast.error('Failed to scan stocks', {
+        description: error?.message || 'Please check your connection and make sure IB Gateway is running'
+      })
     } finally {
       setIsLoading(false)
     }
@@ -278,40 +154,8 @@ function App() {
   // Don't auto-scan on mount - wait for user to start
   // User must click Start/Play, Refresh, or apply preset/settings
 
-  // Ready time countdown
-  useEffect(() => {
-    if (readyTime) {
-      const updateReadyCountdown = () => {
-        const now = Date.now()
-        const ready = readyTime.getTime()
-        const remaining = Math.max(0, Math.floor((ready - now) / 1000))
-        setReadyCountdown(remaining)
-        
-        if (remaining === 0) {
-          // Don't clear immediately - show green "Ready!" banner for 10 seconds
-          setTimeout(() => {
-            setRateLimited(false)
-            setReadyTime(null)
-            localStorage.removeItem('rateLimitedUntil')
-          }, 10000)
-          
-          toast.success('Scanner Ready!', {
-            description: 'Rate limit cleared! You can start scanning now.',
-            duration: 10000
-          })
-        }
-      }
-      
-      updateReadyCountdown()
-      readyTimerRef.current = setInterval(updateReadyCountdown, 1000)
-      
-      return () => {
-        if (readyTimerRef.current) {
-          clearInterval(readyTimerRef.current)
-        }
-      }
-    }
-  }, [readyTime])
+  // IBKR only mode - no rate limits, no countdown needed
+  // Removed rate limit countdown timer
 
   useEffect(() => {
     if (settings.realTimeUpdates) {
@@ -419,75 +263,7 @@ function App() {
     <div className="min-h-screen bg-background text-foreground">
       <Toaster position="top-right" richColors />
       
-      {/* Temporary Pause Banner (60s for Massive.com refresh) */}
-      {rateLimited && readyTime && readyCountdown > 0 && (
-        <div className="bg-yellow-500/10 border-b-4 border-yellow-500/40 sticky top-0 z-50">
-          <div className="container mx-auto px-3 sm:px-4 py-3 sm:py-4">
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
-                  <span className="text-sm font-semibold text-yellow-600 dark:text-yellow-400">
-                    ⏳ Temporary Pause - Massive.com (5/min) Refreshing...
-                  </span>
-                </div>
-                <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2 sm:gap-3">
-                  <div className="flex flex-col items-end">
-                    <span className="text-xs font-medium text-yellow-700 dark:text-yellow-300">
-                      Resuming at: {readyTime.toLocaleTimeString()}
-                    </span>
-                    <span className="text-xs text-yellow-600/70 dark:text-yellow-400/70">
-                      {readyCountdown < 60 
-                        ? `${readyCountdown} seconds remaining`
-                        : `${Math.floor(readyCountdown / 60)} minutes remaining`
-                      }
-                    </span>
-                  </div>
-                  <div className="px-4 py-1.5 rounded-full bg-yellow-500/20 border-2 border-yellow-500/40">
-                    <span className="text-base font-bold text-yellow-600 dark:text-yellow-400 tabular-nums">
-                      ⏱️ {formatCountdown(readyCountdown)}
-                    </span>
-                  </div>
-                </div>
-              </div>
-              <div className="text-xs text-yellow-600 dark:text-yellow-400 bg-yellow-500/5 px-3 py-2 rounded border border-yellow-500/20">
-                💡 <strong>Auto-Resume:</strong> Massive.com provides 5 calls/minute that refresh every 60 seconds. Scanner will automatically resume when quota resets!
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-      
-      {/* Ready Banner */}
-      {rateLimited && readyTime && readyCountdown === 0 && (
-        <div className="bg-green-500/10 border-b-4 border-green-500/40 sticky top-0 z-50 animate-pulse">
-          <div className="container mx-auto px-3 sm:px-4 py-3 sm:py-4">
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-green-500 animate-ping" />
-                  <span className="text-sm font-bold text-green-600 dark:text-green-400">
-                    ✅ API Quota Reset - Scanner Ready!
-                  </span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-xs font-medium text-green-700 dark:text-green-300">
-                    You may try scanning now, but proceed with caution
-                  </span>
-                  <div className="px-4 py-1.5 rounded-full bg-green-500/20 border-2 border-green-500/40">
-                    <span className="text-base font-bold text-green-600 dark:text-green-400">
-                      ✅ READY
-                    </span>
-                  </div>
-                </div>
-              </div>
-              <div className="text-xs text-yellow-600 dark:text-yellow-400 bg-yellow-500/5 px-3 py-2 rounded border border-yellow-500/20">
-                ⚠️ <strong>TIP:</strong> If you get blocked again immediately, Yahoo may require 3-6 hours or 24 hours. Consider using fewer symbols (5-10) or longer scan intervals (30-60s) to avoid future rate limits.
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* IBKR only mode - no rate limit banners */}
       
       {/* Header */}
       <header className="border-b border-border bg-card sticky top-0 z-40">
@@ -560,17 +336,12 @@ function App() {
                 {/* Auto-Refresh Toggle */}
                 <button
                   onClick={toggleAutoRefresh}
-                  disabled={rateLimited && readyCountdown > 0}
-                  className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+                  className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-lg transition-colors ${
                     settings.realTimeUpdates 
                       ? 'bg-green-500 text-white hover:bg-green-600' 
                       : 'bg-muted text-muted-foreground hover:bg-muted/80'
                   }`}
-                  title={
-                    rateLimited && readyCountdown > 0 
-                      ? `Locked until rate limit clears (${Math.floor(readyCountdown / 60)}:${(readyCountdown % 60).toString().padStart(2, '0')})` 
-                      : settings.realTimeUpdates ? 'Pause auto-refresh' : 'Start auto-refresh'
-                  }
+                  title={settings.realTimeUpdates ? 'Pause auto-refresh' : 'Start auto-refresh'}
                 >
                   {settings.realTimeUpdates ? (
                     <>
@@ -656,8 +427,8 @@ function App() {
                   settings={settings}
                   onSettingsChange={handleSettingsUpdate}
                   onClose={() => setShowSettings(false)}
-                  isRateLimited={rateLimited && readyCountdown > 0}
-                  readyCountdown={readyCountdown}
+                  isRateLimited={false}
+                  readyCountdown={0}
                 />
               </div>
             </>
