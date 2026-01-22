@@ -1115,6 +1115,21 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
             chart_data['24h'] = candles
             candles_24h = candles
         
+        # Fetch float data from Yahoo Finance (IBKR doesn't provide float)
+        float_shares = 0
+        try:
+            logging.debug(f"📊 Fetching float data from Yahoo Finance for {symbol}...")
+            ticker = yf.Ticker(symbol)
+            info = ticker.info
+            float_shares = info.get('floatShares', info.get('sharesOutstanding', 0))
+            if float_shares is None:
+                float_shares = 0
+            if float_shares > 0:
+                logging.info(f"✅ Got float data for {symbol}: {float_shares:,} shares from Yahoo Finance")
+        except Exception as e:
+            logging.debug(f"⚠️ Could not fetch float data from Yahoo Finance for {symbol}: {e}")
+            float_shares = 0
+        
         # Fetch IBKR news for this stock
         ibkr_news = []
         try:
@@ -1174,7 +1189,7 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
             'spreadPercent': round(spread_percent, 2) if spread_percent else None,
             'changeAmount': round(change_amount, 2),
             'changePercent': round(change_percent, 2),
-            'float': int(float_shares) if float_shares > 0 else 0,  # From Yahoo Finance (IBKR doesn't provide)
+            'float': int(float_shares) if float_shares and float_shares > 0 else 0,  # From Yahoo Finance (IBKR doesn't provide)
             'marketCap': 0,  # Calculate if needed
             'candles': candles,
             'chartData': chart_data,  # Always includes 24h data
