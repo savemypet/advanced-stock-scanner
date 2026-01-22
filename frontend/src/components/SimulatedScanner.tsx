@@ -29,11 +29,25 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
         const data = await response.json()
         
         if (data.success && data.stocks.length > 0) {
-          console.log(`✅ Found ${data.count} real stocks with charts:`, data.stocks.map((s: any) => s.symbol).join(', '))
+          // Filter to ONLY include stocks with real market data from IBKR
+          const realStocks = data.stocks.filter((stock: any) => 
+            stock.isRealData !== false && 
+            stock.source?.includes('Interactive Brokers') &&
+            (stock.chartData?.['24h'] || stock.candles || []).length > 0
+          )
+          
+          if (realStocks.length === 0) {
+            console.log('⚠️ No real market data stocks found - make sure IB Gateway is running')
+            setSimulatedStocks([])
+            setIsLoading(false)
+            return
+          }
+          
+          console.log(`✅ Found ${realStocks.length} real market data stocks from IBKR:`, realStocks.map((s: any) => s.symbol).join(', '))
           
           // Enhance stocks with pattern detection if not already present
           const enhancedStocks = await Promise.all(
-            data.stocks.map(async (stock: any) => {
+            realStocks.map(async (stock: any) => {
               // If stock has chart data, detect patterns
               if (stock.chartData && stock.chartData['5m']) {
                 const candles = stock.chartData['5m']
@@ -102,6 +116,8 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
                   
                   if (chartData24h.success && chartData24h.stock && chartData24h.stock.candles) {
                     stock.chartData['24h'] = chartData24h.stock.candles
+                    stock.isRealData = true
+                    stock.source = 'Interactive Brokers - Real Market Data'
                     console.log(`✅ Added ${chartData24h.stock.candles.length} candles of 24h data for ${stock.symbol}`)
                     
                     // Re-detect patterns with 24h data
@@ -115,6 +131,10 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
                   console.warn(`⚠️ Could not fetch 24h data for ${stock.symbol}:`, err)
                 }
               }
+              
+              // Ensure stock is marked as real data
+              stock.isRealData = true
+              stock.source = stock.source || 'Interactive Brokers - Real Market Data'
               
               return stock
             })
@@ -881,15 +901,11 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
             </h2>
             <p className="text-sm text-muted-foreground mt-1">
               {isLoading ? (
-                '⏳ Loading today\'s discovered stocks with real charts and patterns...'
-              ) : simulatedStocks.length > 0 && simulatedStocks[0].symbol && !simulatedStocks[0].symbol.startsWith('DEMO-') ? (
-                `🤖 AI Learning from ${simulatedStocks.length} real stocks found today - watch candlestick patterns in action!`
-              ) : liveStocks && liveStocks.length > 0 ? (
-                '📡 Showing stocks from your Live Scanner - watch charts update in real-time!'
-              ) : isLiveMode ? (
-                '🎮 Demo mode - run Live Scanner first for AI to learn from real stocks!'
+                '⏳ Loading real market data stocks from IBKR...'
+              ) : simulatedStocks.length > 0 ? (
+                `🤖 AI Learning from ${simulatedStocks.length} real market data stocks from Interactive Brokers - watch candlestick patterns in action!`
               ) : (
-                'Click any stock to see Bookmap-style volume charts'
+                '⚠️ No real market data stocks available - make sure IB Gateway is running and run a scan to discover stocks'
               )}
             </p>
           </div>
