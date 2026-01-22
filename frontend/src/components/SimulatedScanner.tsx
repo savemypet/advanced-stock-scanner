@@ -240,7 +240,9 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
     return stocks.map(stock => updateSingleStock(stock))
   }
 
-  function updateSingleStock(stock: any): any {
+  // REMOVED: updateSingleStock - Real stocks keep their real data, only price updates slightly
+  // This function is kept for reference but should never be called for real stocks
+  function updateSingleStock_DISABLED(stock: any): any {
     const pattern = stock.pattern || 'uptrend'
     const currentPrice = stock.price
     
@@ -436,7 +438,9 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
     }
   }
 
-  function generateSimulatedStocks(): Stock[] {
+  // REMOVED: generateSimulatedStocks - Only real market data stocks are used
+  // This function is kept for reference but should never be called
+  function generateSimulatedStocks_DISABLED(): Stock[] {
     const now = Date.now()
     
     return [
@@ -600,7 +604,9 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
     ]
   }
 
-  function generateSimulatedChartData(stock: any): { [key: string]: Candle[] } {
+  // REMOVED: generateSimulatedChartData - Only real chart data from IBKR is used
+  // This function is kept for reference but should never be called
+  function generateSimulatedChartData_DISABLED(stock: any): { [key: string]: Candle[] } {
     const basePrice = stock.open
     const pattern = stock.pattern || 'uptrend'
     
