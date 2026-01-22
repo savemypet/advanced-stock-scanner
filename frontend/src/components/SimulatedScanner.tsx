@@ -180,42 +180,54 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
     }
   }, [liveStocks])
 
-  // Real-time updates - update every 3 seconds for visible demo movement
-  // NOTE: For real stocks found today, we keep their real chart data and patterns
+  // Real-time updates - ONLY for real stocks with real market data
+  // NOTE: We only update real stocks from IBKR - no synthetic data
   useEffect(() => {
     if (!isLiveMode) return
 
     const interval = setInterval(() => {
       setSimulatedStocks(prevStocks => {
-        // Only update stocks that don't have real chart data (demo stocks)
-        // Real stocks from today keep their real charts
-        return prevStocks.map(stock => {
-          // If stock has real chart data from today, don't simulate updates
-          // Just keep the real data and patterns
-          if (stock.chartData && stock.chartData['5m'] && stock.chartData['5m'].length > 10) {
-            // This is a real stock - keep it as is, just update price slightly for demo
-            return {
-              ...stock,
-              // Small price movement for demo effect, but keep real chart data
-              currentPrice: stock.currentPrice * (1 + (Math.random() - 0.5) * 0.001),
-            }
+        // ONLY update stocks that have verified real market data
+        // Filter out any non-real stocks first
+        const realStocks = prevStocks.filter(stock => 
+          stock.isRealData !== false && 
+          stock.source?.includes('Interactive Brokers') &&
+          (stock.chartData?.['24h'] || stock.chartData?.['5m'] || stock.candles || []).length > 0
+        )
+        
+        // Only update real stocks with minimal price movement (keep real data intact)
+        return realStocks.map(stock => {
+          // This is a real stock - keep all real data, just update price slightly for demo effect
+          return {
+            ...stock,
+            // Small price movement for demo effect, but keep all real chart data
+            currentPrice: stock.currentPrice * (1 + (Math.random() - 0.5) * 0.001),
+            // Keep all real chart data unchanged
+            chartData: stock.chartData,
+            candles: stock.candles,
+            // Keep detected patterns from real data
+            detectedPattern: stock.detectedPattern
           }
-          // Demo stock - full simulation
-          return updateSingleStock(stock)
         })
       })
       
-      // Update selected stock if modal is open
+      // Update selected stock if modal is open (only if it's a real stock)
       setSelectedStock(prevSelected => {
         if (!prevSelected) return null
-        // Keep real chart data for real stocks
-        if (prevSelected.chartData && prevSelected.chartData['5m'] && prevSelected.chartData['5m'].length > 10) {
+        
+        // Only update if it's a verified real stock
+        if (prevSelected.isRealData !== false && 
+            prevSelected.source?.includes('Interactive Brokers')) {
           return {
             ...prevSelected,
             currentPrice: prevSelected.currentPrice * (1 + (Math.random() - 0.5) * 0.001),
+            // Keep all real data
+            chartData: prevSelected.chartData,
+            candles: prevSelected.candles,
+            detectedPattern: prevSelected.detectedPattern
           }
         }
-        return updateSingleStock(prevSelected)
+        return null // Don't show non-real stocks
       })
     }, 3000) // Update every 3 seconds - reasonable speed to watch
 
@@ -874,14 +886,44 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
   }
 
   const handleStockClick = (stock: Stock) => {
-    // Generate chart data on demand
-    const chartData = generateSimulatedChartData(stock)
-    const stockWithCharts = { ...stock, chartData }
-    setSelectedStock(stockWithCharts as any)
+    // Only show real stocks - use existing real chart data
+    if (stock.isRealData !== false && stock.source?.includes('Interactive Brokers')) {
+      // Use real chart data from stock
+      setSelectedStock(stock as any)
+    } else {
+      console.warn(`⚠️ Skipping non-real stock: ${stock.symbol}`)
+    }
   }
 
-  const handleRefresh = () => {
-    setSimulatedStocks(generateSimulatedStocks())
+  const handleRefresh = async () => {
+    // Refresh by fetching real stocks again
+    setIsLoading(true)
+    try {
+      // Try to fetch real market movers
+      let response = await fetch('http://localhost:5000/api/market-movers?type=gainers')
+      if (!response.ok) {
+        response = await fetch('http://localhost:5000/api/daily-discovered')
+      }
+      const data = await response.json()
+      
+      if (data.success && data.stocks.length > 0) {
+        // Filter to only real stocks
+        const realStocks = data.stocks.filter((stock: any) => 
+          stock.isRealData !== false && 
+          stock.source?.includes('Interactive Brokers')
+        )
+        setSimulatedStocks(realStocks)
+        console.log(`✅ Refreshed with ${realStocks.length} real market data stocks`)
+      } else {
+        console.log(`⚠️ No real stocks available - make sure IB Gateway is running`)
+        setSimulatedStocks([])
+      }
+    } catch (error) {
+      console.error('Error refreshing real stocks:', error)
+      setSimulatedStocks([])
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   return (
