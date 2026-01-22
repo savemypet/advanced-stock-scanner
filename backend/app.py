@@ -1415,22 +1415,33 @@ def scan_stocks():
             for stock in results:
                 # Check if stock already in today's list
                 if not any(s['symbol'] == stock['symbol'] for s in daily_discovered_stocks):
-                    # Ensure stock has full chart data for all timeframes
-                    if 'chartData' not in stock or not stock['chartData']:
-                        # Fetch real chart data for all timeframes
-                        try:
-                            logging.info(f"📊 Fetching full chart data for {stock['symbol']}...")
-                            full_stock_data = scanner.get_stock_data(stock['symbol'], '5m')
-                            if full_stock_data and 'chartData' in full_stock_data:
-                                stock['chartData'] = full_stock_data['chartData']
-                                stock['candles'] = full_stock_data.get('candles', [])
-                                logging.info(f"✅ Added full chart data for {stock['symbol']}")
-                        except Exception as e:
-                            logging.warning(f"⚠️ Could not fetch full chart data for {stock['symbol']}: {str(e)}")
+                    # Ensure stock has 24h data for AI study
+                    if 'chartData' not in stock:
+                        stock['chartData'] = {}
                     
-                    # Store the stock with full data
+                    if '24h' not in stock.get('chartData', {}):
+                        # Fetch 24h data specifically for AI study
+                        try:
+                            logging.info(f"📊 Ensuring 24h data for {stock['symbol']} (AI study requirement)...")
+                            stock_24h = fetch_from_ibkr(stock['symbol'], '24h')
+                            if stock_24h:
+                                if stock_24h.get('candles'):
+                                    stock['chartData']['24h'] = stock_24h['candles']
+                                    logging.info(f"✅ Added 24h data to {stock['symbol']} ({len(stock_24h['candles'])} candles)")
+                                # Also ensure 5m data for detailed view
+                                if '5m' not in stock['chartData']:
+                                    stock_5m = fetch_from_ibkr(stock['symbol'], '5m')
+                                    if stock_5m and stock_5m.get('candles'):
+                                        stock['chartData']['5m'] = stock_5m['candles']
+                        except Exception as e:
+                            logging.warning(f"⚠️ Could not fetch 24h data for {stock['symbol']}: {str(e)}")
+                    
+                    # Mark that 24h data is available
+                    stock['has24hData'] = '24h' in stock.get('chartData', {}) and len(stock.get('chartData', {}).get('24h', [])) > 0
+                    
+                    # Store the stock with 24h data for AI study
                     daily_discovered_stocks.append(stock)
-                    logging.info(f"📊 Added {stock['symbol']} to today's discovered stocks with real charts (total: {len(daily_discovered_stocks)})")
+                    logging.info(f"📊 Added {stock['symbol']} to today's discovered stocks with 24h data for AI study (total: {len(daily_discovered_stocks)})")
         
         # IBKR ONLY MODE - API Status
         ibkr_connected = IBKR_AVAILABLE and IBKR_CONNECTED and (IBKR_INSTANCE and IBKR_INSTANCE.isConnected() if IBKR_INSTANCE else False)
