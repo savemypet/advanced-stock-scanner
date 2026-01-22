@@ -1664,7 +1664,7 @@ def scan_stocks():
             'ibkrPort': IBKR_PORT,
             'ibkrUsername': IBKR_USERNAME,
             'fallbackAvailable': False,  # No fallbacks - IBKR only
-            'recommendedInterval': 3,  # Real-time screening: 10-20 stocks per minute
+            'recommendedInterval': 15,  # Recommended: 15 seconds (balanced speed + reliability, 4 scans/min)
             'mode': 'IBKR_REALTIME_SCREENING',  # Option 2: Real-time screening (default)
             'scanSpeed': '10-20 stocks per minute',
             'method': 'reqMktData (real-time quotes)'
