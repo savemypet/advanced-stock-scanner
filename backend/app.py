@@ -897,6 +897,40 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
         if contract_details:
             name = contract_details[0].longName if contract_details[0].longName else symbol
         
+        # Always fetch 24h data for AI study (if not already fetching 24h)
+        chart_data = {timeframe: candles}
+        if timeframe != '24h':
+            try:
+                logging.info(f"📊 Fetching 24h data for {symbol} from IBKR (AI study)...")
+                hist_24h = IBKR_INSTANCE.reqHistoricalData(
+                    contract,
+                    endDateTime='',
+                    durationStr='1 D',
+                    barSizeSetting='1 hour',
+                    whatToShow='TRADES',
+                    useRTH=True
+                )
+                if hist_24h:
+                    df_24h = util.df(hist_24h)
+                    if not df_24h.empty:
+                        candles_24h = []
+                        for idx, row in df_24h.iterrows():
+                            candles_24h.append({
+                                'time': idx.isoformat() if hasattr(idx, 'isoformat') else str(idx),
+                                'open': round(float(row['open']), 2),
+                                'high': round(float(row['high']), 2),
+                                'low': round(float(row['low']), 2),
+                                'close': round(float(row['close']), 2),
+                                'volume': int(row['volume'])
+                            })
+                        chart_data['24h'] = candles_24h
+                        logging.info(f"✅ Added 24h data to {symbol} ({len(candles_24h)} candles)")
+            except Exception as e:
+                logging.warning(f"⚠️ Could not fetch 24h data for {symbol}: {e}")
+        else:
+            # If requesting 24h, also add it to chartData
+            chart_data['24h'] = candles
+        
         stock_data = {
             'symbol': symbol,
             'name': name,
@@ -912,15 +946,15 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
             'float': 0,  # IBKR doesn't provide float directly
             'marketCap': 0,  # Calculate if needed
             'candles': candles,
-            'chartData': {timeframe: candles},
+            'chartData': chart_data,  # Always includes 24h data
             'lastUpdated': datetime.now().isoformat(),
             'signal': 'BUY' if change_percent > 3 else ('SELL' if change_percent < -3 else 'HOLD'),
             'dataSource': 'Interactive Brokers',
-            'source': f'Interactive Brokers ({timeframe} - {len(candles)} candles)',
+            'source': f'Interactive Brokers ({timeframe} - {len(candles)} candles, 24h data included)',
             'isRealData': True
         }
         
-        logging.info(f"✅ Successfully fetched {symbol} from Interactive Brokers: ${current_price} ({change_percent:+.2f}%) - {len(candles)} candles")
+        logging.info(f"✅ Successfully fetched {symbol} from Interactive Brokers: ${current_price} ({change_percent:+.2f}%) - {len(candles)} candles, 24h data: {len(chart_data.get('24h', []))} candles")
         return stock_data
         
     except Exception as e:
