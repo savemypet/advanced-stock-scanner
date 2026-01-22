@@ -21,13 +21,11 @@ function App() {
   const [selectedStock, setSelectedStock] = useState<Stock | null>(null)
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
   const [countdown, setCountdown] = useState<number>(0)
-  const [rateLimited, setRateLimited] = useState(false)
-  const [readyTime, setReadyTime] = useState<Date | null>(null)
-  const [readyCountdown, setReadyCountdown] = useState<number>(0)
+  // IBKR only mode - no rate limits, removed rate limit state
   const [refreshCooldown, setRefreshCooldown] = useState<number>(0)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
   const countdownRef = useRef<NodeJS.Timeout | null>(null)
-  const readyTimerRef = useRef<NodeJS.Timeout | null>(null)
+  // Removed readyTimerRef - no rate limit countdown needed
   const refreshCooldownRef = useRef<NodeJS.Timeout | null>(null)
   const previousStocksRef = useRef<Set<string>>(new Set())
   
@@ -244,20 +242,7 @@ function App() {
     }
   }
 
-  // Format countdown timer to show hours:minutes:seconds for long waits
-  const formatCountdown = (seconds: number): string => {
-    const hours = Math.floor(seconds / 3600)
-    const minutes = Math.floor((seconds % 3600) / 60)
-    const secs = seconds % 60
-    
-    if (hours > 0) {
-      // Show hours:minutes:seconds for countdowns over 1 hour
-      return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
-    } else {
-      // Show minutes:seconds for countdowns under 1 hour
-      return `${minutes}:${secs.toString().padStart(2, '0')}`
-    }
-  }
+  // Removed formatCountdown - no rate limit countdown needed
 
   return (
     <div className="min-h-screen bg-background text-foreground">

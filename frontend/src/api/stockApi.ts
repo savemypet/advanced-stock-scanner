@@ -1,10 +1,7 @@
 import axios from 'axios'
 import { ScannerSettings, ScanResult, Stock } from '../types'
-import { scanStocks as renderScanStocks, getStockQuote, markScanComplete, canScanNow, getTimeUntilNextScan } from './renderBackend'
-import { lockApi } from '../components/SettingsPanel'
 
-// Use Render backend (bypasses Yahoo rate limits via different IP)
-const USE_RENDER_BACKEND = true
+// IBKR only mode - use local backend (no rate limits)
 const API_BASE_URL = '/api'
 
 export const scanStocks = async (settings: ScannerSettings): Promise<ScanResult> => {
