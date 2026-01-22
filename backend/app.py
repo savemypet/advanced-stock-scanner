@@ -8,6 +8,23 @@ import time
 from typing import List, Dict, Any
 import logging
 import requests
+import os
+
+# Interactive Brokers API Configuration
+try:
+    from ib_insync import IB, Stock, util
+    IBKR_AVAILABLE = True
+except ImportError:
+    IBKR_AVAILABLE = False
+    logging.warning("⚠️ ib_insync not installed. Install with: pip install ib-insync")
+
+# IBKR Connection Settings
+IBKR_HOST = os.getenv('IBKR_HOST', '127.0.0.1')
+IBKR_PORT = int(os.getenv('IBKR_PORT', '7497'))  # 7497 = paper trading, 7496 = live
+IBKR_CLIENT_ID = int(os.getenv('IBKR_CLIENT_ID', '1'))
+IBKR_CONNECTED = False
+IBKR_INSTANCE = None
+IBKR_LOCK = threading.Lock()
 
 app = Flask(__name__)
 CORS(app)
@@ -757,6 +774,153 @@ def news_scheduler():
             logging.error(f"Error in news scheduler: {str(e)}")
             time.sleep(60)
 
+def connect_ibkr():
+    """Connect to Interactive Brokers TWS/IB Gateway"""
+    global IBKR_CONNECTED, IBKR_INSTANCE
+    
+    if not IBKR_AVAILABLE:
+        return False
+    
+    with IBKR_LOCK:
+        if IBKR_CONNECTED and IBKR_INSTANCE and IBKR_INSTANCE.isConnected():
+            return True
+        
+        try:
+            if IBKR_INSTANCE is None:
+                IBKR_INSTANCE = IB()
+            
+            if not IBKR_INSTANCE.isConnected():
+                logging.info(f"🔌 Connecting to Interactive Brokers at {IBKR_HOST}:{IBKR_PORT}...")
+                IBKR_INSTANCE.connect(IBKR_HOST, IBKR_PORT, clientId=IBKR_CLIENT_ID)
+                IBKR_CONNECTED = True
+                logging.info("✅ Connected to Interactive Brokers!")
+                return True
+            else:
+                IBKR_CONNECTED = True
+                return True
+        except Exception as e:
+            logging.warning(f"⚠️ Could not connect to Interactive Brokers: {e}")
+            logging.info("💡 Make sure TWS or IB Gateway is running and API is enabled")
+            IBKR_CONNECTED = False
+            return False
+
+def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
+    """Fetch stock data from Interactive Brokers API (DEFAULT)"""
+    if not IBKR_AVAILABLE:
+        return None
+    
+    if not connect_ibkr():
+        return None
+    
+    try:
+        # Map timeframe to IBKR duration and bar size
+        timeframe_map = {
+            '1m': ('1 D', '1 min'),
+            '2m': ('1 D', '2 mins'),
+            '5m': ('1 D', '5 mins'),
+            '15m': ('1 D', '15 mins'),
+            '30m': ('1 D', '30 mins'),
+            '90m': ('1 D', '1 hour'),
+            '1h': ('1 D', '1 hour'),
+            '24h': ('1 D', '1 hour'),
+            '1week': ('1 W', '1 day'),
+            '1month': ('1 M', '1 day'),
+            '3month': ('3 M', '1 day'),
+            '6month': ('6 M', '1 day'),
+            '1year': ('1 Y', '1 day'),
+            '2year': ('2 Y', '1 day'),
+            '5year': ('5 Y', '1 day'),
+            '10year': ('10 Y', '1 day'),
+            'ytd': ('1 Y', '1 day'),
+            'max': ('10 Y', '1 day')
+        }
+        
+        duration, bar_size = timeframe_map.get(timeframe, ('1 D', '5 mins'))
+        
+        # Create stock contract
+        contract = Stock(symbol, 'SMART', 'USD')
+        
+        # Request historical data
+        logging.info(f"📊 Fetching {symbol} {timeframe} data from Interactive Brokers...")
+        bars = IBKR_INSTANCE.reqHistoricalData(
+            contract,
+            endDateTime='',
+            durationStr=duration,
+            barSizeSetting=bar_size,
+            whatToShow='TRADES',
+            useRTH=True  # Regular trading hours only
+        )
+        
+        if not bars:
+            logging.warning(f"⚠️ No data returned from IBKR for {symbol}")
+            return None
+        
+        # Convert to DataFrame
+        df = util.df(bars)
+        
+        if df.empty:
+            logging.warning(f"⚠️ Empty DataFrame from IBKR for {symbol}")
+            return None
+        
+        # Get current quote
+        IBKR_INSTANCE.reqMktData(contract, '', False, False)
+        ticker = IBKR_INSTANCE.ticker(contract)
+        IBKR_INSTANCE.sleep(1)  # Wait for data
+        
+        current_price = float(ticker.last) if ticker.last else float(df['close'].iloc[-1])
+        previous_close = float(df['close'].iloc[0]) if len(df) > 0 else current_price
+        
+        # Convert to candles format
+        candles = []
+        for idx, row in df.iterrows():
+            candles.append({
+                'time': idx.isoformat() if hasattr(idx, 'isoformat') else str(idx),
+                'open': round(float(row['open']), 2),
+                'high': round(float(row['high']), 2),
+                'low': round(float(row['low']), 2),
+                'close': round(float(row['close']), 2),
+                'volume': int(row['volume'])
+            })
+        
+        change_amount = current_price - previous_close
+        change_percent = (change_amount / previous_close * 100) if previous_close > 0 else 0
+        
+        # Get contract details for additional info
+        contract_details = IBKR_INSTANCE.reqContractDetails(contract)
+        name = symbol
+        if contract_details:
+            name = contract_details[0].longName if contract_details[0].longName else symbol
+        
+        stock_data = {
+            'symbol': symbol,
+            'name': name,
+            'currentPrice': round(current_price, 2),
+            'previousClose': round(previous_close, 2),
+            'openPrice': round(float(df['open'].iloc[-1]), 2) if len(df) > 0 else round(current_price, 2),
+            'dayHigh': round(float(df['high'].max()), 2),
+            'dayLow': round(float(df['low'].min()), 2),
+            'volume': int(df['volume'].sum()) if len(df) > 0 else 0,
+            'avgVolume': int(df['volume'].mean()) if len(df) > 0 else 0,
+            'changeAmount': round(change_amount, 2),
+            'changePercent': round(change_percent, 2),
+            'float': 0,  # IBKR doesn't provide float directly
+            'marketCap': 0,  # Calculate if needed
+            'candles': candles,
+            'chartData': {timeframe: candles},
+            'lastUpdated': datetime.now().isoformat(),
+            'signal': 'BUY' if change_percent > 3 else ('SELL' if change_percent < -3 else 'HOLD'),
+            'dataSource': 'Interactive Brokers',
+            'source': f'Interactive Brokers ({timeframe} - {len(candles)} candles)',
+            'isRealData': True
+        }
+        
+        logging.info(f"✅ Successfully fetched {symbol} from Interactive Brokers: ${current_price} ({change_percent:+.2f}%) - {len(candles)} candles")
+        return stock_data
+        
+    except Exception as e:
+        logging.error(f"❌ Error fetching {symbol} from Interactive Brokers: {e}")
+        return None
+
 class StockScanner:
     def __init__(self):
         # Note: symbols are now managed globally in active_symbols (auto-expands)
@@ -768,6 +932,16 @@ class StockScanner:
         self.volume_multiplier = 2.0
         
     def get_stock_data(self, symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
+        """
+        Get stock data - DEFAULT: Interactive Brokers, Fallback: Yahoo Finance
+        """
+        # Try Interactive Brokers FIRST (default)
+        ibkr_data = fetch_from_ibkr(symbol, timeframe)
+        if ibkr_data:
+            return ibkr_data
+        
+        # Fallback to Yahoo Finance if IBKR unavailable
+        logging.info(f"🔄 IBKR unavailable, falling back to Yahoo Finance for {symbol}")
         """Fetch real-time stock data with Massive.com as primary API (5 calls/min)"""
         try:
             logging.info(f"🔍 Fetching data for {symbol} (timeframe: {timeframe})")
