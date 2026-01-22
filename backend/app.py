@@ -941,13 +941,10 @@ class StockScanner:
             return ibkr_data
         
         # Fallback to Yahoo Finance if IBKR unavailable
-        logging.info(f"🔄 IBKR unavailable, falling back to Yahoo Finance for {symbol}")
-        """Fetch real-time stock data with Massive.com as primary API (5 calls/min)"""
+        logging.info(f"🔄 IBKR unavailable, falling back to other APIs for {symbol}")
         try:
-            logging.info(f"🔍 Fetching data for {symbol} (timeframe: {timeframe})")
-            
-            # SMART AUTO-SWITCHING LOGIC (Massive.com First - 5 calls/min refresh!)
-            # Priority 1: Try Massive.com FIRST (best for real-time: 5 calls/min)
+            # SMART AUTO-SWITCHING LOGIC (Fallback APIs)
+            # Priority 1: Try Massive.com (best for real-time: 5 calls/min)
             if should_use_massive():
                 logging.info(f"⚡ Using Massive.com for {symbol} (PRIMARY API - 5/min)")
                 try:

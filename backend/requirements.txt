@@ -3,3 +3,4 @@ flask-cors==4.0.0
 yfinance==0.2.35
 pandas>=2.0.0
 requests==2.31.0
+ib-insync>=0.9.86
