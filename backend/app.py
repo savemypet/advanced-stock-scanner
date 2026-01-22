@@ -865,15 +865,16 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
     
     try:
         # Map timeframe to IBKR duration and bar size
+        # Extend duration to include yesterday's data when market is closed or for 24h timeframe
         timeframe_map = {
-            '1m': ('1 D', '1 min'),
-            '2m': ('1 D', '2 mins'),
-            '5m': ('1 D', '5 mins'),
-            '15m': ('1 D', '15 mins'),
-            '30m': ('1 D', '30 mins'),
-            '90m': ('1 D', '1 hour'),
-            '1h': ('1 D', '1 hour'),
-            '24h': ('1 D', '1 hour'),
+            '1m': ('2 D', '1 min'),      # 2 days to include yesterday
+            '2m': ('2 D', '2 mins'),
+            '5m': ('2 D', '5 mins'),     # 2 days to include yesterday
+            '15m': ('2 D', '15 mins'),
+            '30m': ('2 D', '30 mins'),
+            '90m': ('2 D', '1 hour'),
+            '1h': ('2 D', '1 hour'),     # 2 days to include yesterday
+            '24h': ('2 D', '1 hour'),    # 2 days to include yesterday
             '1week': ('1 W', '1 day'),
             '1month': ('1 M', '1 day'),
             '3month': ('3 M', '1 day'),
@@ -886,16 +887,21 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
             'max': ('10 Y', '1 day')
         }
         
-        duration, bar_size = timeframe_map.get(timeframe, ('1 D', '5 mins'))
+        duration, bar_size = timeframe_map.get(timeframe, ('2 D', '5 mins'))  # Default to 2 days
         
         # Create stock contract
         contract = Stock(symbol, 'SMART', 'USD')
         
-        # Request historical data
+        # Request historical data - include yesterday's data
         if not market_open:
-            logging.info(f"📊 Market is CLOSED - Fetching historical data for {symbol} {timeframe}...")
+            logging.info(f"📊 Market is CLOSED - Fetching historical data for {symbol} {timeframe} (including yesterday)...")
         else:
-            logging.info(f"📊 Fetching {symbol} {timeframe} data from Interactive Brokers (Market OPEN)...")
+            logging.info(f"📊 Fetching {symbol} {timeframe} data from Interactive Brokers (Market OPEN, including yesterday)...")
+        
+        # For 24h timeframe, extend duration to get yesterday's data too
+        if timeframe == '24h':
+            duration = '2 D'  # Get 2 days to include yesterday
+            logging.info(f"📊 Extended duration to 2 days to include yesterday's data for {symbol}")
         
         bars = IBKR_INSTANCE.reqHistoricalData(
             contract,
@@ -1628,16 +1634,17 @@ def get_daily_discovered():
 
 @app.route('/api/stock/<symbol>', methods=['GET'])
 def get_stock(symbol):
-    """Get detailed data for a specific stock - ONLY Interactive Brokers"""
+    """Get detailed data for a specific stock - ONLY Interactive Brokers (includes yesterday's data)"""
     try:
         timeframe = request.args.get('timeframe', '5m')
+        include_yesterday = request.args.get('includeYesterday', 'true').lower() == 'true'
         market_open = is_market_open()
         
         # ONLY use Interactive Brokers - no fallbacks
         if not market_open:
-            logging.info(f"📊 Market is CLOSED - Fetching historical data for {symbol} {timeframe}")
+            logging.info(f"📊 Market is CLOSED - Fetching historical data for {symbol} {timeframe} (including yesterday: {include_yesterday})")
         else:
-            logging.info(f"📊 Fetching {timeframe} chart data for {symbol} from Interactive Brokers ONLY (Market OPEN)")
+            logging.info(f"📊 Fetching {timeframe} chart data for {symbol} from Interactive Brokers ONLY (Market OPEN, including yesterday: {include_yesterday})")
         
         stock_data = scanner.get_stock_data(symbol, timeframe)
         
