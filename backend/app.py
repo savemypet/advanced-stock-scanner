@@ -9,6 +9,10 @@ from typing import List, Dict, Any
 import logging
 import requests
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
 # Interactive Brokers API Configuration
 try:
@@ -22,6 +26,8 @@ except ImportError:
 IBKR_HOST = os.getenv('IBKR_HOST', '127.0.0.1')
 IBKR_PORT = int(os.getenv('IBKR_PORT', '7497'))  # 7497 = paper trading, 7496 = live
 IBKR_CLIENT_ID = int(os.getenv('IBKR_CLIENT_ID', '1'))
+IBKR_USERNAME = os.getenv('IBKR_USERNAME', 'userconti')
+IBKR_PASSWORD = os.getenv('IBKR_PASSWORD', 'mbnadc21234')
 IBKR_CONNECTED = False
 IBKR_INSTANCE = None
 IBKR_LOCK = threading.Lock()
