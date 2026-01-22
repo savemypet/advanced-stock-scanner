@@ -940,10 +940,17 @@ class StockScanner:
     def get_stock_data(self, symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
         """
         Get stock data - DEFAULT: Interactive Brokers, Fallback: Yahoo Finance
+        Always fetches 24h data for AI study
         """
         # Try Interactive Brokers FIRST (default)
         ibkr_data = fetch_from_ibkr(symbol, timeframe)
         if ibkr_data:
+            # Ensure 24h data is included
+            if timeframe != '24h' and '24h' not in ibkr_data.get('chartData', {}):
+                logging.info(f"📊 Fetching 24h data for {symbol} from IBKR...")
+                ibkr_24h = fetch_from_ibkr(symbol, '24h')
+                if ibkr_24h and ibkr_24h.get('candles'):
+                    ibkr_data['chartData']['24h'] = ibkr_24h['candles']
             return ibkr_data
         
         # Fallback to Yahoo Finance if IBKR unavailable
@@ -1039,7 +1046,7 @@ class StockScanner:
             '15m': '5d',
             '30m': '5d',
             '1h': '1mo',
-            '24h': '3mo',
+            '24h': '1d',  # Changed to 1d to get last 24 hours
             '1month': '2y'  # 2 years to get enough monthly candles
         }
         
@@ -1050,7 +1057,7 @@ class StockScanner:
             '15m': '15m',
             '30m': '30m',
             '1h': '1h',
-            '24h': '1d',
+            '24h': '1h',  # Changed to 1h for 24h timeframe (24 candles = 24 hours)
             '1month': '1mo'  # Monthly candles
         }
         
@@ -1060,6 +1067,27 @@ class StockScanner:
         logging.info(f"📊 Fetching history for {symbol}: period={period}, interval={interval}")
         hist = ticker.history(period=period, interval=interval)
         logging.info(f"📈 History received for {symbol}: {len(hist)} candles")
+        
+        # For non-24h timeframes, also fetch 24h data for AI study
+        if timeframe != '24h':
+            try:
+                logging.info(f"📊 Also fetching 24h data for {symbol} (AI study)...")
+                hist_24h = ticker.history(period='1d', interval='1h')
+                if not hist_24h.empty and len(hist_24h) > 0:
+                    candles_24h = []
+                    for idx, row in hist_24h.iterrows():
+                        candles_24h.append({
+                            'time': idx.isoformat(),
+                            'open': round(float(row['Open']), 2),
+                            'high': round(float(row['High']), 2),
+                            'low': round(float(row['Low']), 2),
+                            'close': round(float(row['Close']), 2),
+                            'volume': int(row['Volume'])
+                        })
+                    logging.info(f"✅ Fetched {len(candles_24h)} candles of 24h data for {symbol}")
+            except Exception as e:
+                logging.warning(f"⚠️ Could not fetch 24h data for {symbol}: {e}")
+                candles_24h = []
         
         if hist.empty or len(hist) < 2:
             logging.warning(f"❌ {symbol}: Insufficient data (empty={hist.empty}, length={len(hist)})")
@@ -1082,6 +1110,12 @@ class StockScanner:
         if float_shares is None:
             float_shares = 1_000_000_000
             
+        # Prepare chart data with 24h data included
+        chart_data = {timeframe: candles}
+        if timeframe != '24h' and 'candles_24h' in locals() and candles_24h:
+            chart_data['24h'] = candles_24h
+            logging.info(f"✅ Added 24h data to chartData for {symbol} ({len(candles_24h)} candles)")
+        
         # Calculate moving averages
         closes = hist['Close']
         ma20 = closes.rolling(window=20, min_periods=1).mean()
