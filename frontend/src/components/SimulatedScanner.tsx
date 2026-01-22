@@ -142,22 +142,35 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
           
           setSimulatedStocks(enhancedStocks)
         } else {
-          // No stocks discovered yet - use live stocks if available, or generate demo
+          // No real stocks found - only use live stocks if they have real data
           if (liveStocks && liveStocks.length > 0) {
-            console.log(`📊 Using ${liveStocks.length} stocks from current Live Scanner`)
-            setSimulatedStocks(liveStocks)
+            const realLiveStocks = liveStocks.filter((stock: any) => 
+              stock.isRealData !== false && 
+              stock.source?.includes('Interactive Brokers')
+            )
+            if (realLiveStocks.length > 0) {
+              console.log(`📊 Using ${realLiveStocks.length} real market data stocks from Live Scanner`)
+              setSimulatedStocks(realLiveStocks)
+            } else {
+              console.log(`⚠️ No real market data stocks available - make sure IB Gateway is running`)
+              setSimulatedStocks([])
+            }
           } else {
-            console.log(`📝 No real stocks found yet - generating demo stocks`)
-            setSimulatedStocks(generateSimulatedStocks())
+            console.log(`⚠️ No real market data stocks found - make sure IB Gateway is running and run a scan`)
+            setSimulatedStocks([])
           }
         }
       } catch (error) {
-        console.error('Error fetching daily stocks:', error)
-        // Fallback to live stocks or demo
+        console.error('Error fetching real market data stocks:', error)
+        // Only use live stocks if they have real data
         if (liveStocks && liveStocks.length > 0) {
-          setSimulatedStocks(liveStocks)
+          const realLiveStocks = liveStocks.filter((stock: any) => 
+            stock.isRealData !== false && 
+            stock.source?.includes('Interactive Brokers')
+          )
+          setSimulatedStocks(realLiveStocks)
         } else {
-          setSimulatedStocks(generateSimulatedStocks())
+          setSimulatedStocks([])
         }
       } finally {
         setIsLoading(false)
@@ -902,26 +915,35 @@ export default function SimulatedScanner({ liveStocks = [] }: SimulatedScannerPr
   }
 
   const handleRefresh = async () => {
-    // Refresh by fetching real stocks again
+    // Refresh by fetching ONLY real market data stocks from IBKR
     setIsLoading(true)
     try {
-      // Try to fetch real market movers
+      console.log('🔄 Refreshing real market data stocks from IBKR...')
+      // Try to fetch real market movers first
       let response = await fetch('http://localhost:5000/api/market-movers?type=gainers')
       if (!response.ok) {
+        // Fallback to daily-discovered
         response = await fetch('http://localhost:5000/api/daily-discovered')
       }
       const data = await response.json()
       
       if (data.success && data.stocks.length > 0) {
-        // Filter to only real stocks
+        // Filter to ONLY real stocks with verified IBKR data
         const realStocks = data.stocks.filter((stock: any) => 
           stock.isRealData !== false && 
-          stock.source?.includes('Interactive Brokers')
+          stock.source?.includes('Interactive Brokers') &&
+          (stock.chartData?.['24h'] || stock.chartData?.['5m'] || stock.candles || []).length > 0
         )
-        setSimulatedStocks(realStocks)
-        console.log(`✅ Refreshed with ${realStocks.length} real market data stocks`)
+        
+        if (realStocks.length > 0) {
+          setSimulatedStocks(realStocks)
+          console.log(`✅ Refreshed with ${realStocks.length} real market data stocks from IBKR`)
+        } else {
+          console.log(`⚠️ No real market data stocks available - make sure IB Gateway is running`)
+          setSimulatedStocks([])
+        }
       } else {
-        console.log(`⚠️ No real stocks available - make sure IB Gateway is running`)
+        console.log(`⚠️ No real stocks available - make sure IB Gateway is running and run a scan`)
         setSimulatedStocks([])
       }
     } catch (error) {
