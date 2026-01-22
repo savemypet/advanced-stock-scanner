@@ -1,6 +1,5 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-import yfinance as yf
 import pandas as pd
 from datetime import datetime, timedelta
 import threading
@@ -134,15 +133,7 @@ def generate_synthetic_candles(symbol: str, previous_close: float, current_price
     
     return candles
 
-# Finnhub API Configuration
-FINNHUB_API_KEY = 'd5nsql9r01qma2b65ef0d5nsql9r01qma2b65efg'
-FINNHUB_BASE_URL = 'https://finnhub.io/api/v1'
-
-# Finnhub FREE Tier Limits:
-# - 60 API calls per minute
-# - Safe rate: 1 call per second (with buffer)
-# - Monthly limit: ~30,000 calls (varies by endpoint)
-FINNHUB_RATE_LIMIT_DELAY = 1.5  # 1.5 seconds between calls (safer than 1 second)
+# News: IBKR ONLY - no external news APIs
 
 # ScraperAPI Configuration (Fallback for Yahoo Finance rate limits)
 SCRAPERAPI_KEY = 'd787516e0bbe1264e92e43db77a12244'  # ScraperAPI key configured ✅
@@ -189,10 +180,7 @@ serpapi_calls_reset_date = None  # Reset counter monthly
 
 # In-memory cache for stock data and news
 stock_cache = {}
-news_cache = {}  # Stores news fetched at 4 AM
-news_fetched_today = False  # Track if we already fetched news today
-last_news_fetch_date = None  # Track the date of last news fetch
-finnhub_api_calls_today = 0  # Track daily API calls
+# News: IBKR ONLY - no external news caching needed
 cache_lock = threading.Lock()
 
 # Daily discovered stocks for demo/simulation learning
@@ -651,140 +639,11 @@ def track_massive_usage():
         remaining = MASSIVE_RATE_LIMIT - len(massive_calls_history)
         logging.info(f"🔍 Massive.com call #{len(massive_calls_history)}/{MASSIVE_RATE_LIMIT}/min ({remaining} remaining)")
 
-def fetch_news_for_stock(symbol: str) -> List[Dict[str, Any]]:
-    """Fetch today's news for a specific stock from Finnhub"""
-    global finnhub_api_calls_today
-    
-    try:
-        finnhub_api_calls_today += 1
-        # Get today's date range
-        today = datetime.now().date()
-        from_date = today.strftime('%Y-%m-%d')
-        to_date = today.strftime('%Y-%m-%d')
-        
-        # Finnhub company news endpoint
-        url = f'{FINNHUB_BASE_URL}/company-news'
-        params = {
-            'symbol': symbol,
-            'from': from_date,
-            'to': to_date,
-            'token': FINNHUB_API_KEY
-        }
-        
-        response = requests.get(url, params=params, timeout=10)
-        
-        if response.status_code == 200:
-            news_items = response.json()
-            
-            # Filter and format news
-            formatted_news = []
-            for item in news_items[:5]:  # Limit to 5 most recent
-                formatted_news.append({
-                    'headline': item.get('headline', 'No headline'),
-                    'summary': item.get('summary', ''),
-                    'source': item.get('source', 'Unknown'),
-                    'url': item.get('url', ''),
-                    'timestamp': item.get('datetime', 0),  # Unix timestamp
-                    'category': item.get('category', '')
-                })
-            
-            logging.info(f"✅ Finnhub: Successfully fetched {len(formatted_news)} news items for {symbol}")
-            return formatted_news
-        elif response.status_code == 429:
-            logging.error(f"🔴 Finnhub RATE LIMIT hit for {symbol}! You've exceeded 60 calls/minute.")
-            return []
-        elif response.status_code == 403:
-            logging.error(f"🔴 Finnhub API key invalid or expired for {symbol}")
-            return []
-        else:
-            logging.warning(f"⚠️ Finnhub API error for {symbol}: Status {response.status_code}")
-            return []
-            
-    except Exception as e:
-        logging.error(f"Error fetching news for {symbol}: {str(e)}")
-        return []
+# News fetching: IBKR ONLY - news is fetched directly from IBKR when scanning stocks
+# No external news APIs needed
 
-def should_fetch_news() -> bool:
-    """Check if we should fetch news (4-9 AM window, once per day)"""
-    global news_fetched_today, last_news_fetch_date
-    
-    now = datetime.now()
-    current_hour = now.hour
-    current_date = now.date()
-    
-    # Reset flag if it's a new day
-    if last_news_fetch_date != current_date:
-        news_fetched_today = False
-        last_news_fetch_date = current_date
-    
-    # Only fetch between 4 AM and 9 AM, and only once per day
-    if 4 <= current_hour < 9 and not news_fetched_today:
-        return True
-    
-    return False
-
-def fetch_news_for_scanner_stocks(symbols: List[str]):
-    """Fetch news for all stocks in the scanner at 4 AM"""
-    global news_fetched_today, news_cache
-    
-    if not should_fetch_news():
-        return
-    
-    logging.info(f"📰 Starting news fetch for {len(symbols)} stocks at 4 AM...")
-    logging.info(f"📊 Finnhub FREE tier limit: 60 calls/minute (using {FINNHUB_RATE_LIMIT_DELAY}s delay)")
-    
-    start_time = time.time()
-    successful_fetches = 0
-    
-    with cache_lock:
-        news_cache = {}
-        for i, symbol in enumerate(symbols, 1):
-            logging.info(f"📡 [{i}/{len(symbols)}] Fetching news for {symbol}...")
-            news = fetch_news_for_stock(symbol)
-            if news:
-                news_cache[symbol] = news
-                successful_fetches += 1
-                logging.info(f"✅ Found {len(news)} news items for {symbol}")
-            else:
-                logging.info(f"ℹ️  No news found for {symbol}")
-            
-            # Respect Finnhub rate limits (60 calls/min FREE tier)
-            # Use 1.5 second delay for safety buffer
-            if i < len(symbols):  # Don't delay after last symbol
-                logging.debug(f"⏸️  Waiting {FINNHUB_RATE_LIMIT_DELAY}s before next request...")
-                time.sleep(FINNHUB_RATE_LIMIT_DELAY)
-        
-        news_fetched_today = True
-        elapsed_time = time.time() - start_time
-        logging.info(f"✅ News fetching complete!")
-        logging.info(f"📊 Stats: {successful_fetches}/{len(symbols)} stocks with news")
-        logging.info(f"⏱️  Total time: {elapsed_time:.1f} seconds")
-        logging.info(f"📈 API calls made: {len(symbols)} (under 60/min limit)")
-
-def news_scheduler():
-    """Background thread to check time and fetch news at 4 AM"""
-    global news_fetched_today
-    
-    while True:
-        try:
-            now = datetime.now()
-            current_hour = now.hour
-            
-            # Check if it's 4 AM and we haven't fetched news today
-            if current_hour == 4 and not news_fetched_today:
-                logging.info("It's 4 AM! Fetching news for scanner stocks...")
-                # Fetch news for all active symbols (including newly discovered ones)
-                with active_symbols_lock:
-                    symbols_to_fetch = list(active_symbols)
-                logging.info(f"📰 Fetching news for {len(symbols_to_fetch)} active symbols (auto-discovered)")
-                fetch_news_for_scanner_stocks(symbols_to_fetch)
-            
-            # Check every minute
-            time.sleep(60)
-            
-        except Exception as e:
-            logging.error(f"Error in news scheduler: {str(e)}")
-            time.sleep(60)
+# News fetching: IBKR ONLY - news is fetched directly from IBKR when scanning stocks
+# No external news APIs or scheduled news fetching needed
 
 def connect_ibkr():
     """Connect to Interactive Brokers TWS/IB Gateway"""
@@ -1355,30 +1214,10 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
             chart_data['24h'] = candles
             candles_24h = candles
         
-        # Fetch float data from Massive.com only (IBKR doesn't provide float, Yahoo Finance not used)
-        # Only use Massive.com if available and scan times are okay
+        # Float data: IBKR doesn't provide float, and we're IBKR-only (no other APIs)
+        # Float filter is disabled anyway, so we don't need to fetch it
         float_shares = 0
         float_source = None
-        
-        # Try Massive.com (if available and rate limit allows)
-        try:
-            if MASSIVE_KEY != 'YOUR_MASSIVE_API_KEY' and should_use_massive():
-                logging.debug(f"📊 Fetching float data from Massive.com for {symbol}...")
-                float_url = f"https://api.massive.com/v2/reference/financials/{symbol}/float"
-                params = {'apiKey': MASSIVE_KEY}
-                response = requests.get(float_url, params=params, timeout=3)  # Quick timeout
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get('status') == 'OK' and data.get('results'):
-                        result = data['results'][0] if isinstance(data['results'], list) else data['results']
-                        float_shares = result.get('free_float', 0)
-                        if float_shares and float_shares > 0:
-                            logging.info(f"✅ Got float data for {symbol}: {float_shares:,} shares from Massive.com")
-                            float_source = 'Massive.com'
-                            track_massive_usage()  # Track usage
-        except Exception as e:
-            logging.debug(f"⚠️ Could not fetch float data from Massive.com for {symbol}: {e}")
-            float_shares = 0
         
         # Fetch IBKR news for this stock
         ibkr_news = []
@@ -1810,23 +1649,13 @@ class StockScanner:
                     logging.info(f"📊 {symbol} passed real-time filters, fetching full data for volume check...")
                     full_data = self.get_stock_data(symbol, timeframe)
                     if full_data:
-                        # Get float from Yahoo Finance (IBKR doesn't provide)
-                        try:
-                            ticker = yf.Ticker(symbol)
-                            info = ticker.info
-                            yahoo_float = info.get('floatShares', info.get('sharesOutstanding', 0))
-                            if yahoo_float is None:
-                                yahoo_float = 0
-                        except:
-                            yahoo_float = full_data.get('float', 0)
-                        
-                        # Merge real-time data with historical
+                        # Merge real-time data with historical (IBKR only - no float data)
                         stock_data.update({
                             'candles': full_data.get('candles', []),
                             'chartData': full_data.get('chartData', {}),
                             'volume': full_data.get('volume', 0),
                             'avgVolume': full_data.get('avgVolume', 0),
-                            'float': int(yahoo_float) if yahoo_float > 0 else full_data.get('float', 0),
+                            'float': full_data.get('float', 0),  # IBKR doesn't provide float
                             'realtimeOnly': False
                         })
                         # Ensure 24h data
@@ -1858,15 +1687,9 @@ class StockScanner:
             price_check = stock_data.get('currentPrice') and min_price <= stock_data['currentPrice'] <= max_price
             logging.info(f"🔍 [SCANNER] [{symbol}] Price check: ${stock_data.get('currentPrice')} in range ${min_price}-${max_price} = {price_check}")
             
-            # Float check: Only apply if Massive returned float data (skip if no float from Massive)
-            float_value = stock_data.get('float', 0)
-            float_source = stock_data.get('floatSource')
-            if float_value > 0 and float_source:  # Only check float if Massive actually returned it
-                float_check = float_value <= max_float
-                logging.info(f"🔍 [SCANNER] [{symbol}] Float check: {float_value:,} <= {max_float:,} = {float_check} (from {float_source})")
-            else:
-                float_check = True  # Skip float filter if Massive didn't return float data
-                logging.info(f"🔍 [SCANNER] [{symbol}] Float check: SKIPPED (no float data from Massive)")
+            # Float check: DISABLED - not scanning for float
+            float_check = True  # Always pass float check (float filter disabled)
+            logging.info(f"🔍 [SCANNER] [{symbol}] Float check: DISABLED (always passes)")
             
             gain_check = stock_data.get('changePercent', 0) >= min_gain
             logging.info(f"🔍 [SCANNER] [{symbol}] Gain check: {stock_data.get('changePercent', 0)}% >= {min_gain}% = {gain_check}")
@@ -1908,14 +1731,12 @@ class StockScanner:
                 
                 stock_data['isHot'] = stock_data['volume'] > stock_data['avgVolume'] * 5
                 
-                # Check if this stock has news (from 4 AM news cache or IBKR news)
-                external_news = news_cache.get(symbol, [])
+                # Check if this stock has news (IBKR ONLY - no external news sources)
                 ibkr_news = stock_data.get('ibkrNews', [])
-                all_news = external_news + ibkr_news
-                stock_data['hasNews'] = len(all_news) > 0
-                stock_data['newsCount'] = len(all_news)
-                stock_data['allNews'] = all_news  # Combine IBKR + external news
-                stock_data['ibkrNewsCount'] = len(ibkr_news)  # Track IBKR news separately
+                stock_data['hasNews'] = len(ibkr_news) > 0
+                stock_data['newsCount'] = len(ibkr_news)
+                stock_data['allNews'] = ibkr_news  # IBKR news only
+                stock_data['ibkrNewsCount'] = len(ibkr_news)
                 
                 # Ensure chartData has current timeframe
                 if timeframe not in stock_data['chartData']:
@@ -2324,24 +2145,18 @@ def get_stock(symbol):
 
 @app.route('/api/news/<symbol>', methods=['GET'])
 def get_news(symbol):
-    """Get cached news for a specific stock (fetched at 4 AM)"""
-    try:
-        with cache_lock:
-            news = news_cache.get(symbol.upper(), [])
-        
-        return jsonify({
-            'success': True,
-            'symbol': symbol.upper(),
-            'news': news,
-            'count': len(news),
-            'fetchedToday': news_fetched_today,
-            'timestamp': datetime.now().isoformat()
-        })
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+    """Get news for a specific stock from IBKR (IBKR ONLY - no external news)"""
+    # News is fetched directly from IBKR when scanning/fetching stock data
+    # This endpoint returns empty since we don't cache news separately
+    return jsonify({
+        'success': True,
+        'symbol': symbol.upper(),
+        'news': [],
+        'count': 0,
+        'message': 'News is fetched directly from IBKR when scanning stocks',
+        'source': 'IBKR ONLY',
+        'timestamp': datetime.now().isoformat()
+    })
 
 @app.route('/api/symbols', methods=['GET'])
 def get_symbols():
@@ -2465,8 +2280,8 @@ def health_check():
 
 if __name__ == '__main__':
     # Start news scheduler in background thread
-    news_thread = threading.Thread(target=news_scheduler, daemon=True)
-    news_thread.start()
-    logging.info("News scheduler started. Will fetch news at 4 AM daily.")
+    # News: IBKR ONLY - no scheduled news fetching needed
+    # News is fetched directly from IBKR when scanning stocks
+    logging.info("News: IBKR ONLY mode - news fetched directly from IBKR when scanning")
     
     app.run(debug=True, host='0.0.0.0', port=5000)

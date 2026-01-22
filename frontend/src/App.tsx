@@ -46,11 +46,7 @@ function App() {
     updateInterval: 60, // 60 seconds - optimal scan interval (based on ~30s average scan time)
     notificationsEnabled: true,
     notifyOnNewStocks: true,
-    // API Selection - Default: Yahoo only (most reliable)
-    useYahoo: true,
-    useSerpAPI: false,
-    useAlphaVantage: false,
-    useMassive: false,
+    // IBKR ONLY - no other APIs
   })
 
   // IBKR only mode - no rate limits, clear any saved rate limit state
