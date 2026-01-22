@@ -488,8 +488,8 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
                 placeholder="e.g., 10M or 10000000"
               />
               <PresetStatusBadge 
-                status={getPresetStatus(localSettings).float} 
-                message="IBKR doesn't provide float data - this filter won't work"
+                status="good" 
+                message="Float data from Yahoo Finance (supplemented with IBKR data)"
               />
             </div>
             <InputField

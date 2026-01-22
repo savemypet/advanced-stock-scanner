@@ -1174,7 +1174,7 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
             'spreadPercent': round(spread_percent, 2) if spread_percent else None,
             'changeAmount': round(change_amount, 2),
             'changePercent': round(change_percent, 2),
-            'float': 0,  # IBKR doesn't provide float directly
+            'float': int(float_shares) if float_shares > 0 else 0,  # From Yahoo Finance (IBKR doesn't provide)
             'marketCap': 0,  # Calculate if needed
             'candles': candles,
             'chartData': chart_data,  # Always includes 24h data
@@ -1518,13 +1518,23 @@ class StockScanner:
                     logging.info(f"📊 {symbol} passed real-time filters, fetching full data for volume check...")
                     full_data = self.get_stock_data(symbol, timeframe)
                     if full_data:
+                        # Get float from Yahoo Finance (IBKR doesn't provide)
+                        try:
+                            ticker = yf.Ticker(symbol)
+                            info = ticker.info
+                            yahoo_float = info.get('floatShares', info.get('sharesOutstanding', 0))
+                            if yahoo_float is None:
+                                yahoo_float = 0
+                        except:
+                            yahoo_float = full_data.get('float', 0)
+                        
                         # Merge real-time data with historical
                         stock_data.update({
                             'candles': full_data.get('candles', []),
                             'chartData': full_data.get('chartData', {}),
                             'volume': full_data.get('volume', 0),
                             'avgVolume': full_data.get('avgVolume', 0),
-                            'float': full_data.get('float', 0),
+                            'float': int(yahoo_float) if yahoo_float > 0 else full_data.get('float', 0),
                             'realtimeOnly': False
                         })
                         # Ensure 24h data
