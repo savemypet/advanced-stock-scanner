@@ -843,6 +843,11 @@ def is_market_open() -> bool:
     from datetime import datetime, time
     
     try:
+        try:
+            import pytz
+        except ImportError:
+            pytz = None
+        
         if pytz:
             # US Eastern Time (market timezone)
             et = pytz.timezone('US/Eastern')
