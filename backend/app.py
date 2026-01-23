@@ -2523,21 +2523,15 @@ def health_check():
         if IBKR_AVAILABLE:
             if IBKR_INSTANCE:
                 try:
-                    # Safely check connection status
+                    # Safely check connection status (non-blocking - just check, don't reconnect)
                     is_connected = IBKR_INSTANCE.isConnected()
-                    if not is_connected:
-                        # Connection lost, try to reconnect (but don't block health check)
-                        logging.warning("⚠️ [HEALTH] IBKR connection lost, attempting reconnect...")
-                        global IBKR_CONNECTED
-                        IBKR_CONNECTED = False
-                        # Don't block health check - reconnect in background
-                        try:
-                            connect_ibkr()
-                        except Exception as reconnect_error:
-                            logging.warning(f"⚠️ [HEALTH] Reconnect attempt failed: {reconnect_error}")
-                    else:
+                    if is_connected:
                         ibkr_connected = True
                         IBKR_CONNECTED = True
+                    else:
+                        # Connection lost - just report it, don't try to reconnect (that blocks)
+                        IBKR_CONNECTED = False
+                        connection_error = "IBKR instance exists but not connected. Check TWS/IB Gateway is running and API is enabled."
                 except Exception as e:
                     logging.warning(f"⚠️ [HEALTH] Error checking IBKR connection: {e}")
                     IBKR_CONNECTED = False
