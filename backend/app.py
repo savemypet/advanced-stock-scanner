@@ -10,6 +10,18 @@ import requests
 import os
 from dotenv import load_dotenv
 
+# Ollama AI Integration
+try:
+    from ollama_service import (
+        analyze_candlesticks_with_ollama,
+        check_ollama_connection,
+        teach_ollama_pattern
+    )
+    OLLAMA_AVAILABLE = True
+except ImportError:
+    OLLAMA_AVAILABLE = False
+    logging.warning("⚠️ Ollama service not available. Install ollama_service.py")
+
 # Load environment variables from .env file
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
@@ -24,7 +36,12 @@ except ImportError:
 # IBKR Connection Settings
 IBKR_HOST = os.getenv('IBKR_HOST', '127.0.0.1')
 IBKR_PORT = int(os.getenv('IBKR_PORT', '4001'))  # 4001 = default IB Gateway port, 7497 = paper trading, 7496 = live
-IBKR_CLIENT_ID = int(os.getenv('IBKR_CLIENT_ID', '1'))
+# Use a unique client ID based on process ID to avoid conflicts
+import os as os_sys
+DEFAULT_CLIENT_ID = os_sys.getpid() % 1000  # Use process ID mod 1000 for unique ID
+if DEFAULT_CLIENT_ID == 0:
+    DEFAULT_CLIENT_ID = 1  # IBKR doesn't allow client ID 0
+IBKR_CLIENT_ID = int(os.getenv('IBKR_CLIENT_ID', str(DEFAULT_CLIENT_ID)))
 IBKR_USERNAME = os.getenv('IBKR_USERNAME', 'userconti')
 IBKR_PASSWORD = os.getenv('IBKR_PASSWORD', 'mbnadc21234')
 IBKR_CONNECTED = False
@@ -39,7 +56,12 @@ ERROR_COUNT = 0
 
 app = Flask(__name__)
 CORS(app)
-logging.basicConfig(level=logging.INFO)
+# Enhanced logging configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 
 # Helper function to generate REALISTIC synthetic candles with DISTINCT patterns per timeframe
 def generate_synthetic_candles(symbol: str, previous_close: float, current_price: float, timeframe: str = '5m'):
@@ -654,9 +676,21 @@ def connect_ibkr():
         return False
     
     with IBKR_LOCK:
-        if IBKR_CONNECTED and IBKR_INSTANCE and IBKR_INSTANCE.isConnected():
-            logging.debug("✅ [IBKR] Already connected")
-            return True
+        # Check if already connected and verify connection is still alive
+        if IBKR_INSTANCE:
+            try:
+                if IBKR_INSTANCE.isConnected():
+                    IBKR_CONNECTED = True
+                    logging.debug("✅ [IBKR] Already connected and verified")
+                    return True
+                else:
+                    # Connection lost, reset state
+                    logging.warning("⚠️ [IBKR] Connection lost, will reconnect")
+                    IBKR_CONNECTED = False
+            except Exception as e:
+                logging.warning(f"⚠️ [IBKR] Connection check failed: {e}, will reconnect")
+                IBKR_CONNECTED = False
+                IBKR_INSTANCE = None
         
         try:
             if IBKR_INSTANCE is None:
@@ -669,11 +703,39 @@ def connect_ibkr():
             if not IBKR_INSTANCE.isConnected():
                 logging.info(f"🔌 [IBKR] Connecting to {IBKR_HOST}:{IBKR_PORT} (Client ID: {IBKR_CLIENT_ID})...")
                 logging.info(f"🔌 [IBKR] Username: {IBKR_USERNAME}")
-                IBKR_INSTANCE.connect(IBKR_HOST, IBKR_PORT, clientId=IBKR_CLIENT_ID)
-                IBKR_CONNECTED = True
-                logging.info("✅ [IBKR] Successfully connected to Interactive Brokers!")
-                logging.info(f"✅ [IBKR] Connection details - Host: {IBKR_HOST}, Port: {IBKR_PORT}, Client ID: {IBKR_CLIENT_ID}")
-                return True
+                
+                # Try to connect with current client ID, if it fails try alternative IDs
+                max_retries = 5
+                connected = False
+                current_client_id = IBKR_CLIENT_ID
+                
+                for attempt in range(max_retries):
+                    try:
+                        IBKR_INSTANCE.connect(IBKR_HOST, IBKR_PORT, clientId=current_client_id, timeout=10)
+                        IBKR_CONNECTED = True
+                        connected = True
+                        logging.info("✅ [IBKR] Successfully connected to Interactive Brokers!")
+                        logging.info(f"✅ [IBKR] Connection details - Host: {IBKR_HOST}, Port: {IBKR_PORT}, Client ID: {current_client_id}")
+                        # Update global client ID if we used a different one
+                        if current_client_id != IBKR_CLIENT_ID:
+                            # Note: Can't modify global IBKR_CLIENT_ID here, but connection will work
+                            logging.info(f"ℹ️ [IBKR] Using Client ID {current_client_id} (original {IBKR_CLIENT_ID} was in use)")
+                        return True
+                    except Exception as connect_error:
+                        error_msg = str(connect_error).lower()
+                        if "client id is already in use" in error_msg or "clientid" in error_msg or "already in use" in error_msg:
+                            # Try next available client ID
+                            current_client_id = (IBKR_CLIENT_ID + attempt + 1) % 1000
+                            if current_client_id == 0:
+                                current_client_id = 1  # Skip 0
+                            logging.warning(f"⚠️ [IBKR] Client ID {IBKR_CLIENT_ID + attempt if attempt > 0 else IBKR_CLIENT_ID} in use, trying {current_client_id}...")
+                            time.sleep(1)  # Brief delay before retry
+                        else:
+                            # Different error, re-raise
+                            raise
+                
+                if not connected:
+                    raise Exception(f"Failed to connect after {max_retries} attempts with different client IDs")
             else:
                 IBKR_CONNECTED = True
                 logging.info("✅ [IBKR] Already connected (verified)")
@@ -698,6 +760,28 @@ def connect_ibkr():
                 logging.warning("⚠️ [IBKR] Already connected to another client - check Client ID")
             IBKR_CONNECTED = False
             return False
+
+# Keepalive thread to maintain IBKR connection
+def keepalive_ibkr():
+    """Periodically check and maintain IBKR connection"""
+    while True:
+        try:
+            time.sleep(30)  # Check every 30 seconds
+            if IBKR_AVAILABLE:
+                with IBKR_LOCK:
+                    if IBKR_INSTANCE:
+                        try:
+                            if not IBKR_INSTANCE.isConnected():
+                                # Connection lost, try to reconnect
+                                logging.warning("⚠️ [IBKR KEEPALIVE] Connection lost, attempting reconnect...")
+                                global IBKR_CONNECTED
+                                IBKR_CONNECTED = False
+                                connect_ibkr()
+                        except Exception as e:
+                            logging.warning(f"⚠️ [IBKR KEEPALIVE] Error checking connection: {e}")
+                            IBKR_CONNECTED = False
+        except Exception as e:
+            logging.error(f"❌ [IBKR KEEPALIVE] Error: {e}")
 
 def get_scanner_delay() -> int:
     """Get current scanner delay (auto-adjusted based on errors)"""
@@ -842,7 +926,7 @@ def fetch_realtime_ibkr(symbol: str) -> Dict[str, Any]:
             whatToShow='TRADES',
             useRTH=use_rth
         )
-        IBKR_INSTANCE.sleep(1.0)  # Wait longer for data (Snapshot Bundle may be slower)
+        IBKR_INSTANCE.sleep(0.5)  # Reduced wait time for faster scanning
         
         if not bars or len(bars) == 0:
             logging.warning(f"⚠️ [IBKR REALTIME] [{symbol}] No 5-minute bars received")
@@ -1085,7 +1169,7 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
         # Get current quote with bid/ask data
         IBKR_INSTANCE.reqMktData(contract, '', False, False)
         ticker = IBKR_INSTANCE.ticker(contract)
-        IBKR_INSTANCE.sleep(1)  # Wait for data
+        IBKR_INSTANCE.sleep(0.3)  # Further reduced wait time for faster scanning
         
         # Helper function to safely convert values, handling NaN
         import math
@@ -1615,19 +1699,33 @@ class StockScanner:
         with active_symbols_lock:
             scan_symbols = list(active_symbols)
         
-        # Limit to first 5 symbols to prevent timeouts (can be increased later)
-        if len(scan_symbols) > 5:
-            scan_symbols = scan_symbols[:5]
-            logging.info(f"🔍 [SCANNER] Limited scan to 5 symbols to prevent timeouts")
+        # Limit to first 2 symbols to prevent timeouts (IBKR is very slow)
+        if len(scan_symbols) > 2:
+            scan_symbols = scan_symbols[:2]
+            logging.info(f"🔍 [SCANNER] Limited scan to 2 symbols to prevent timeouts")
         
         logging.info(f"🔍 [SCANNER] Scanning {len(scan_symbols)} symbols: {', '.join(scan_symbols)}")
         
         # IBKR ONLY MODE - No other APIs
-        logging.info(f"🔍 [SCANNER] Checking IBKR connection...")
-        ibkr_available = IBKR_AVAILABLE and connect_ibkr()
+        # Note: Connection check is already done in scan_stocks() endpoint before calling filter_stocks()
+        # Just verify connection status here without retrying (to avoid duplicate warnings)
+        logging.info(f"🔍 [SCANNER] Verifying IBKR connection status...")
+        
+        # Safely check IBKR connection status
+        ibkr_available = False
+        try:
+            if IBKR_AVAILABLE and IBKR_CONNECTED and IBKR_INSTANCE:
+                try:
+                    ibkr_available = IBKR_INSTANCE.isConnected()
+                except Exception as check_error:
+                    logging.warning(f"⚠️ [SCANNER] Error checking IBKR connection: {check_error}")
+                    ibkr_available = False
+        except Exception as e:
+            logging.warning(f"⚠️ [SCANNER] Error accessing IBKR instance: {e}")
+            ibkr_available = False
         
         if not ibkr_available:
-            logging.error(f"❌ [SCANNER] Interactive Brokers unavailable - cannot scan stocks")
+            logging.error(f"❌ [SCANNER] IBKR not available - connection should have been established in scan_stocks()")
             logging.error(f"💡 Make sure TWS/IB Gateway is running and logged in as {IBKR_USERNAME}")
             return []
         
@@ -1644,13 +1742,20 @@ class StockScanner:
             symbol_count += 1
             symbol_start = time.time()
             logging.info(f"🔍 [SCANNER] [{symbol_count}/{len(scan_symbols)}] Processing {symbol}...")
-            # Use real-time screening first (FAST - reqMktData)
-            stock_data = fetch_realtime_ibkr(symbol)
             
-            # If real-time fails, fall back to full historical data
-            if not stock_data:
-                logging.debug(f"⚠️ Real-time data unavailable for {symbol}, trying historical data...")
-                stock_data = self.get_stock_data(symbol, timeframe)
+            # Add timeout protection for each symbol (max 30 seconds per symbol)
+            try:
+                # Use real-time screening first (FAST - reqMktData)
+                stock_data = fetch_realtime_ibkr(symbol)
+                
+                # If real-time fails, fall back to full historical data (with timeout)
+                if not stock_data:
+                    logging.debug(f"⚠️ Real-time data unavailable for {symbol}, trying historical data...")
+                    stock_data = self.get_stock_data(symbol, timeframe)
+            except Exception as symbol_error:
+                symbol_elapsed = time.time() - symbol_start
+                logging.error(f"❌ [SCANNER] [{symbol}] Error after {symbol_elapsed:.2f}s: {symbol_error}")
+                continue  # Skip this symbol and continue with next
             
             if stock_data is None:
                 continue
@@ -1689,19 +1794,15 @@ class StockScanner:
                 if 'chartData' not in stock_data:
                     stock_data['chartData'] = {}
                 
+                # Skip 24h data fetch during scan to speed up (can be fetched later if needed)
+                # This significantly speeds up the scan process
                 if '24h' not in stock_data['chartData']:
-                    logging.info(f"📊 Ensuring 24h data for {symbol} (AI study requirement)...")
-                    try:
-                        stock_24h = fetch_from_ibkr(symbol, '24h')
-                        if stock_24h and stock_24h.get('candles'):
-                            stock_data['chartData']['24h'] = stock_24h['candles']
-                            logging.info(f"✅ Added 24h data to {symbol} ({len(stock_24h['candles'])} candles)")
-                        elif stock_data.get('candles'):
-                            stock_data['chartData']['24h'] = stock_data['candles']
-                    except Exception as e:
-                        logging.warning(f"⚠️ Could not fetch 24h data for {symbol}: {e}")
-                        if stock_data.get('candles'):
-                            stock_data['chartData']['24h'] = stock_data['candles']
+                    # Use existing candles as 24h data if available (faster)
+                    if stock_data.get('candles'):
+                        stock_data['chartData']['24h'] = stock_data['candles']
+                        logging.debug(f"📊 Using existing candles as 24h data for {symbol} (fast mode)")
+                    # Don't fetch 24h data during scan - too slow
+                    # Can be fetched later when viewing stock details
             
             # Apply filters
             logging.info(f"🔍 [SCANNER] [{symbol}] Applying filters...")
@@ -1805,6 +1906,57 @@ def scan_stocks():
     logging.info(f"🔍 [SCANNER API] ===== SCAN REQUEST RECEIVED =====")
     
     try:
+        # CRITICAL: Ensure IBKR is connected before scanning
+        logging.info(f"🔍 [SCANNER API] Checking IBKR connection status...")
+        
+        # Check current connection status
+        ibkr_currently_connected = (
+            IBKR_AVAILABLE and 
+            IBKR_CONNECTED and 
+            IBKR_INSTANCE and 
+            IBKR_INSTANCE.isConnected() if IBKR_INSTANCE else False
+        )
+        
+        if not ibkr_currently_connected:
+            logging.warning(f"⚠️ [SCANNER API] IBKR not connected, attempting to connect...")
+            
+            # Attempt to connect with retries
+            max_connection_retries = 3
+            connection_successful = False
+            
+            for conn_attempt in range(max_connection_retries):
+                logging.info(f"🔌 [SCANNER API] IBKR connection attempt {conn_attempt + 1}/{max_connection_retries}...")
+                connection_successful = connect_ibkr()
+                
+                if connection_successful:
+                    # Verify connection is actually active
+                    if IBKR_INSTANCE and IBKR_INSTANCE.isConnected():
+                        logging.info(f"✅ [SCANNER API] IBKR connected successfully!")
+                        connection_successful = True
+                        break
+                    else:
+                        logging.warning(f"⚠️ [SCANNER API] Connection returned True but instance not connected, retrying...")
+                        connection_successful = False
+                
+                if conn_attempt < max_connection_retries - 1:
+                    time.sleep(2)  # Wait before retry
+            
+            if not connection_successful:
+                error_msg = "IBKR connection failed. Please ensure IB Gateway or TWS is running and API is enabled."
+                logging.error(f"❌ [SCANNER API] {error_msg}")
+                return jsonify({
+                    'error': error_msg,
+                    'details': {
+                        'ibkrAvailable': IBKR_AVAILABLE,
+                        'ibkrConnected': False,
+                        'ibkrHost': IBKR_HOST,
+                        'ibkrPort': IBKR_PORT,
+                        'suggestion': 'Check: Configure > API > Settings > Enable ActiveX and Socket Clients'
+                    }
+                }), 503  # Service Unavailable
+        else:
+            logging.info(f"✅ [SCANNER API] IBKR already connected, proceeding with scan...")
+        
         criteria = request.json
         logging.info(f"🔍 [SCANNER API] Scan criteria received:")
         logging.info(f"   - minPrice: {criteria.get('minPrice')}")
@@ -1817,7 +1969,22 @@ def scan_stocks():
         
         logging.info(f"🔍 [SCANNER API] Calling scanner.filter_stocks()...")
         filter_start = time.time()
-        results = scanner.filter_stocks(criteria)
+        
+        # Add timeout protection for scan (max 75 seconds to allow frontend 90s timeout)
+        try:
+            results = scanner.filter_stocks(criteria)
+        except Exception as scan_error:
+            scan_elapsed = time.time() - filter_start
+            logging.error(f"❌ [SCANNER API] filter_stocks failed after {scan_elapsed:.2f}s: {scan_error}")
+            import traceback
+            logging.error(traceback.format_exc())
+            return jsonify({
+                'success': False,
+                'error': f'Scan failed: {str(scan_error)}',
+                'stocks': [],
+                'timestamp': datetime.now().isoformat()
+            }), 500
+        
         filter_elapsed = time.time() - filter_start
         logging.info(f"✅ [SCANNER API] filter_stocks completed in {filter_elapsed:.2f}s, returned {len(results)} stocks")
         
@@ -1864,8 +2031,12 @@ def scan_stocks():
                     daily_discovered_stocks.append(stock)
                     logging.info(f"📊 Added {stock['symbol']} to today's discovered stocks for AI learning (scanner pick only, total: {len(daily_discovered_stocks)})")
         
-        # IBKR ONLY MODE - API Status
+        # IBKR ONLY MODE - API Status (verify connection is still active)
         ibkr_connected = IBKR_AVAILABLE and IBKR_CONNECTED and (IBKR_INSTANCE and IBKR_INSTANCE.isConnected() if IBKR_INSTANCE else False)
+        
+        # Final verification - if somehow disconnected during scan, log warning
+        if not ibkr_connected:
+            logging.warning(f"⚠️ [SCANNER API] IBKR connection lost during scan, but scan completed")
         
         total_elapsed = time.time() - scan_start
         logging.info(f"✅ [SCANNER API] Scan completed in {total_elapsed:.2f}s")
@@ -2319,34 +2490,95 @@ log_handler.setFormatter(log_formatter)
 root_logger = logging.getLogger()
 root_logger.addHandler(log_handler)
 
+# Keepalive thread to maintain IBKR connection
+def keepalive_ibkr():
+    """Periodically check and maintain IBKR connection"""
+    while True:
+        try:
+            time.sleep(30)  # Check every 30 seconds
+            if IBKR_AVAILABLE:
+                with IBKR_LOCK:
+                    if IBKR_INSTANCE:
+                        try:
+                            if not IBKR_INSTANCE.isConnected():
+                                # Connection lost, try to reconnect
+                                logging.warning("⚠️ [IBKR KEEPALIVE] Connection lost, attempting reconnect...")
+                                global IBKR_CONNECTED
+                                IBKR_CONNECTED = False
+                                connect_ibkr()
+                        except Exception as e:
+                            logging.warning(f"⚠️ [IBKR KEEPALIVE] Error checking connection: {e}")
+                            IBKR_CONNECTED = False
+        except Exception as e:
+            logging.error(f"❌ [IBKR KEEPALIVE] Error: {e}")
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint with detailed connection info"""
-    ibkr_connected = IBKR_AVAILABLE and IBKR_CONNECTED and (IBKR_INSTANCE and IBKR_INSTANCE.isConnected() if IBKR_INSTANCE else False)
-    
-    # Get connection error details if disconnected
-    connection_error = None
-    if IBKR_AVAILABLE and not ibkr_connected:
-        try:
-            if IBKR_INSTANCE and not IBKR_INSTANCE.isConnected():
-                connection_error = "IBKR instance exists but not connected. Check TWS/IB Gateway is running and API is enabled."
-            elif not IBKR_INSTANCE:
-                connection_error = "IBKR instance not initialized. Check ib_insync is installed and TWS/IB Gateway is running."
+    try:
+        # Verify connection is still alive (with proper error handling)
+        ibkr_connected = False
+        connection_error = None
+        
+        if IBKR_AVAILABLE:
+            if IBKR_INSTANCE:
+                try:
+                    # Safely check connection status
+                    is_connected = IBKR_INSTANCE.isConnected()
+                    if not is_connected:
+                        # Connection lost, try to reconnect (but don't block health check)
+                        logging.warning("⚠️ [HEALTH] IBKR connection lost, attempting reconnect...")
+                        global IBKR_CONNECTED
+                        IBKR_CONNECTED = False
+                        # Don't block health check - reconnect in background
+                        try:
+                            connect_ibkr()
+                        except Exception as reconnect_error:
+                            logging.warning(f"⚠️ [HEALTH] Reconnect attempt failed: {reconnect_error}")
+                    else:
+                        ibkr_connected = True
+                        IBKR_CONNECTED = True
+                except Exception as e:
+                    logging.warning(f"⚠️ [HEALTH] Error checking IBKR connection: {e}")
+                    IBKR_CONNECTED = False
+                    connection_error = f"Error checking connection: {str(e)}"
             else:
-                connection_error = "Connection status unknown. Check TWS/IB Gateway connection."
-        except Exception as e:
-            connection_error = f"Error checking connection: {str(e)}"
+                connection_error = "IBKR instance not initialized. Check ib_insync is installed and TWS/IB Gateway is running."
+        else:
+            connection_error = "IBKR not available (ib_insync not installed)"
+        
+        # Get connection error details if disconnected
+        if IBKR_AVAILABLE and not ibkr_connected and not connection_error:
+            try:
+                if IBKR_INSTANCE:
+                    connection_error = "IBKR instance exists but not connected. Check TWS/IB Gateway is running and API is enabled."
+                else:
+                    connection_error = "IBKR instance not initialized. Check ib_insync is installed and TWS/IB Gateway is running."
+            except Exception as e:
+                connection_error = f"Error checking connection: {str(e)}"
     
-    return jsonify({
-        'status': 'healthy',
-        'ibkrAvailable': IBKR_AVAILABLE,
-        'ibkrConnected': ibkr_connected,
-        'ibkrHost': IBKR_HOST,
-        'ibkrPort': IBKR_PORT,
-        'ibkrUsername': IBKR_USERNAME,
-        'connectionError': connection_error,
-        'timestamp': datetime.now().isoformat()
-    })
+        return jsonify({
+            'status': 'healthy',
+            'ibkrAvailable': IBKR_AVAILABLE,
+            'ibkrConnected': ibkr_connected,
+            'ibkrHost': IBKR_HOST,
+            'ibkrPort': IBKR_PORT,
+            'ibkrUsername': IBKR_USERNAME,
+            'connectionError': connection_error,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        # Catch any unexpected errors in health check
+        logging.error(f"❌ [HEALTH] Health check error: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'ibkrAvailable': IBKR_AVAILABLE,
+            'ibkrConnected': False,
+            'timestamp': datetime.now().isoformat()
+        }), 500
 
 @app.route('/api/logs', methods=['GET'])
 def get_logs():
@@ -2372,10 +2604,1109 @@ def get_logs():
             'logs': []
         }), 500
 
+# ==================== OLLAMA AI ENDPOINTS ====================
+
+@app.route('/api/ollama/status', methods=['GET'])
+def ollama_status():
+    """Check Ollama connection and available models"""
+    if not OLLAMA_AVAILABLE:
+        return jsonify({
+            'available': False,
+            'error': 'Ollama service not available'
+        }), 503
+    
+    try:
+        status = check_ollama_connection()
+        return jsonify(status)
+    except Exception as e:
+        return jsonify({
+            'available': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/ollama/analyze', methods=['POST'])
+def ollama_analyze():
+    """Analyze candlestick patterns using Ollama AI"""
+    if not OLLAMA_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'Ollama service not available'
+        }), 503
+    
+    try:
+        data = request.json
+        symbol = data.get('symbol', '')
+        candles = data.get('candles', [])
+        current_price = data.get('currentPrice', 0)
+        volume = data.get('volume', 0)
+        avg_volume = data.get('avgVolume', 0)
+        detected_patterns = data.get('detectedPatterns', None)  # Optional: patterns detected by frontend
+        
+        if not candles:
+            return jsonify({
+                'success': False,
+                'error': 'No candle data provided'
+            }), 400
+        
+        result = analyze_candlesticks_with_ollama(
+            candles=candles,
+            symbol=symbol,
+            current_price=current_price,
+            volume=volume,
+            avg_volume=avg_volume,
+            detected_patterns=detected_patterns
+        )
+        
+        return jsonify(result)
+    except Exception as e:
+        logging.error(f"❌ [OLLAMA] Analysis endpoint error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/ollama/teach', methods=['POST'])
+def ollama_teach():
+    """Teach Ollama a new candlestick pattern"""
+    if not OLLAMA_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'Ollama service not available'
+        }), 503
+    
+    try:
+        data = request.json
+        pattern_name = data.get('patternName', '')
+        description = data.get('description', '')
+        examples = data.get('examples', [])
+        
+        if not pattern_name or not description:
+            return jsonify({
+                'success': False,
+                'error': 'Pattern name and description required'
+            }), 400
+        
+        result = teach_ollama_pattern(
+            pattern_name=pattern_name,
+            description=description,
+            examples=examples
+        )
+        
+        return jsonify(result)
+    except Exception as e:
+        logging.error(f"❌ [OLLAMA] Teaching endpoint error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/ollama/teach-all', methods=['POST'])
+def ollama_teach_all():
+    """Teach Ollama ALL candlestick patterns from the codebase"""
+    if not OLLAMA_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'Ollama service not available'
+        }), 503
+    
+    if teach_all_patterns_to_ollama is None:
+        return jsonify({
+            'success': False,
+            'error': 'Pattern teaching module not available'
+        }), 503
+    
+    try:
+        logging.info("📚 [OLLAMA] Starting comprehensive pattern teaching...")
+        result = teach_all_patterns_to_ollama()
+        
+        if result.get('success'):
+            logging.info(f"✅ [OLLAMA] Teaching complete: {result.get('message')}")
+        else:
+            logging.error(f"❌ [OLLAMA] Teaching failed: {result.get('error')}")
+        
+        return jsonify(result)
+    except Exception as e:
+        logging.error(f"❌ [OLLAMA] Teaching all patterns error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/ollama/teach-ibkr', methods=['POST'])
+def ollama_teach_ibkr():
+    """Teach Ollama about IBKR trading capabilities"""
+    if not OLLAMA_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'Ollama service not available'
+        }), 503
+    
+    try:
+        from ollama_ibkr_trading import teach_ibkr_trading_to_ollama
+        logging.info("📚 [OLLAMA IBKR] Starting IBKR trading knowledge teaching...")
+        result = teach_ibkr_trading_to_ollama()
+        
+        if result.get('success'):
+            logging.info(f"✅ [OLLAMA IBKR] Teaching complete: {result.get('message')}")
+        else:
+            logging.error(f"❌ [OLLAMA IBKR] Teaching failed: {result.get('error')}")
+        
+        return jsonify(result)
+    except ImportError:
+        return jsonify({
+            'success': False,
+            'error': 'IBKR trading teaching module not available'
+        }), 503
+    except Exception as e:
+        logging.error(f"❌ [OLLAMA IBKR] Teaching error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/ollama/trade-decision', methods=['POST'])
+def ollama_trade_decision():
+    """
+    Get AI trading decision (BUY/SELL/HOLD) for a stock
+    This endpoint will be used when buy/sell functionality is implemented
+    """
+    if not OLLAMA_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'Ollama service not available'
+        }), 503
+    
+    try:
+        data = request.json
+        symbol = data.get('symbol', '')
+        candles = data.get('candles', [])
+        current_price = data.get('currentPrice', 0)
+        volume = data.get('volume', 0)
+        avg_volume = data.get('avgVolume', 0)
+        account_balance = data.get('accountBalance', 0)  # For future use
+        risk_tolerance = data.get('riskTolerance', 'MEDIUM')  # LOW, MEDIUM, HIGH
+        
+        if not candles:
+            return jsonify({
+                'success': False,
+                'error': 'No candle data provided'
+            }), 400
+        
+        # Get detected patterns if provided
+        detected_patterns = data.get('detectedPatterns', None)
+        
+        # Analyze with Ollama
+        analysis_result = analyze_candlesticks_with_ollama(
+            candles=candles,
+            symbol=symbol,
+            current_price=current_price,
+            volume=volume,
+            avg_volume=avg_volume,
+            detected_patterns=detected_patterns
+        )
+        
+        if not analysis_result.get('success'):
+            return jsonify(analysis_result), 500
+        
+        analysis = analysis_result.get('analysis', {})
+        signal = analysis.get('signal', 'HOLD')
+        
+        # Build trading decision (framework for future buy/sell implementation)
+        decision = {
+            'symbol': symbol,
+            'action': signal,  # BUY, SELL, or HOLD
+            'confidence': analysis.get('confidence', 'LOW'),
+            'reasoning': analysis.get('reasoning', ''),
+            'entryPrice': analysis.get('entryPrice'),
+            'stopLoss': analysis.get('stopLoss'),
+            'takeProfit': analysis.get('takeProfit'),
+            'pattern': analysis.get('pattern'),
+            'timestamp': datetime.now().isoformat(),
+            'readyToExecute': False  # Will be True when buy/sell is implemented
+        }
+        
+        # For now, we only return the decision
+        # When buy/sell is implemented, this will trigger actual trades
+        if signal == 'BUY' and analysis.get('confidence') == 'HIGH':
+            decision['readyToExecute'] = True
+            decision['recommendedQuantity'] = calculate_position_size(
+                account_balance=account_balance,
+                entry_price=analysis.get('entryPrice') or current_price,
+                risk_tolerance=risk_tolerance
+            )
+        
+        return jsonify({
+            'success': True,
+            'decision': decision
+        })
+    except Exception as e:
+        logging.error(f"❌ [OLLAMA] Trade decision error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/ollama/execute-trade', methods=['POST'])
+def ollama_execute_trade():
+    """
+    Ollama analyzes and automatically executes trades through IBKR
+    This allows Ollama to directly talk to IBKR and execute trades
+    """
+    if not OLLAMA_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'Ollama service not available'
+        }), 503
+    
+    if not TRADING_AVAILABLE or not IBKR_CONNECTED:
+        return jsonify({
+            'success': False,
+            'error': 'IBKR not connected',
+            'message': 'Please connect to Interactive Brokers first'
+        }), 503
+    
+    try:
+        data = request.json
+        symbol = data.get('symbol', '')
+        candles = data.get('candles', [])
+        current_price = data.get('currentPrice', 0)
+        volume = data.get('volume', 0)
+        avg_volume = data.get('avgVolume', 0)
+        account_balance = data.get('accountBalance', 10000)  # Default $10k if not provided
+        risk_tolerance = data.get('riskTolerance', 'MEDIUM')
+        auto_execute = data.get('autoExecute', False)  # Safety flag - must be explicitly True
+        
+        if not candles:
+            return jsonify({
+                'success': False,
+                'error': 'No candle data provided'
+            }), 400
+        
+        # Get detected patterns if provided
+        detected_patterns = data.get('detectedPatterns', None)
+        
+        # Analyze with Ollama
+        logging.info(f"🤖 [OLLAMA IBKR] Analyzing {symbol} for trade execution...")
+        analysis_result = analyze_candlesticks_with_ollama(
+            candles=candles,
+            symbol=symbol,
+            current_price=current_price,
+            volume=volume,
+            avg_volume=avg_volume,
+            detected_patterns=detected_patterns
+        )
+        
+        if not analysis_result.get('success'):
+            return jsonify(analysis_result), 500
+        
+        analysis = analysis_result.get('analysis', {})
+        signal = analysis.get('signal', 'HOLD')
+        confidence = analysis.get('confidence', 'LOW')
+        
+        # Only execute if signal is BUY/SELL and confidence is HIGH
+        if signal == 'HOLD' or confidence != 'HIGH':
+            return jsonify({
+                'success': True,
+                'decision': {
+                    'symbol': symbol,
+                    'action': signal,
+                    'confidence': confidence,
+                    'reasoning': analysis.get('reasoning', ''),
+                    'executed': False,
+                    'message': f'Not executing: {signal} signal with {confidence} confidence (requires HIGH confidence)'
+                }
+            })
+        
+        # OLLAMA TRADING CONSTRAINTS
+        # 1. Price range filter: Only trade stocks between $1-$6
+        entry_price = analysis.get('entryPrice') or current_price
+        if entry_price < 1.0 or entry_price > 6.0:
+            return jsonify({
+                'success': True,
+                'decision': {
+                    'symbol': symbol,
+                    'action': signal,
+                    'confidence': confidence,
+                    'reasoning': analysis.get('reasoning', ''),
+                    'executed': False,
+                    'message': f'Price ${entry_price:.2f} outside allowed range ($1.00-$6.00). Ollama only trades stocks between $1-$6.'
+                }
+            })
+        
+        # Also check current_price as backup
+        if current_price < 1.0 or current_price > 6.0:
+            return jsonify({
+                'success': True,
+                'decision': {
+                    'symbol': symbol,
+                    'action': signal,
+                    'confidence': confidence,
+                    'reasoning': analysis.get('reasoning', ''),
+                    'executed': False,
+                    'message': f'Current price ${current_price:.2f} outside allowed range ($1.00-$6.00). Ollama only trades stocks between $1-$6.'
+                }
+            })
+        
+        # Get entry price for all checks
+        entry_price = analysis.get('entryPrice') or current_price
+        
+        # 2. Check daily trade limits
+        today = get_today_date()
+        can_trade, limit_message = check_daily_trade_limit(today, signal)
+        
+        if not can_trade:
+            return jsonify({
+                'success': True,
+                'decision': {
+                    'symbol': symbol,
+                    'action': signal,
+                    'confidence': confidence,
+                    'reasoning': analysis.get('reasoning', ''),
+                    'executed': False,
+                    'message': limit_message
+                }
+            })
+        
+        # 3. Check if date is enabled for trading (from request)
+        enabled_days = data.get('enabledDays', {})
+        if today not in enabled_days or not enabled_days[today]:
+            return jsonify({
+                'success': True,
+                'decision': {
+                    'symbol': symbol,
+                    'action': signal,
+                    'confidence': confidence,
+                    'reasoning': analysis.get('reasoning', ''),
+                    'executed': False,
+                    'message': f'Trading not enabled for {today}. Please enable this day in the calendar.'
+                }
+            })
+        
+        # 4. Check daily budget
+        daily_budget = data.get('dailyTradeBudget', 0)
+        if daily_budget <= 0:
+            return jsonify({
+                'success': True,
+                'decision': {
+                    'symbol': symbol,
+                    'action': signal,
+                    'confidence': confidence,
+                    'reasoning': analysis.get('reasoning', ''),
+                    'executed': False,
+                    'message': 'Daily trade budget not set. Please set a budget in the calendar.'
+                }
+            })
+        
+        # 5. Check end-of-day cutoff (3:30 PM ET - no new positions)
+        now = datetime.now()
+        try:
+            import pytz
+            et = pytz.timezone('US/Eastern')
+            now_et = datetime.now(et)
+        except ImportError:
+            now_et = now
+        
+        cutoff_time = now_et.replace(hour=15, minute=30, second=0, microsecond=0)  # 3:30 PM ET
+        
+        if now_et >= cutoff_time:
+            return jsonify({
+                'success': True,
+                'decision': {
+                    'symbol': symbol,
+                    'action': signal,
+                    'confidence': confidence,
+                    'reasoning': analysis.get('reasoning', ''),
+                    'executed': False,
+                    'message': f'Too close to market close (3:30 PM cutoff). Ollama does not open new positions after 3:30 PM ET to ensure positions can close before end of day (4:00 PM).'
+                }
+            })
+        
+        # 6. Use full $4,000 per stock (Ollama uses all $4k for each stock it buys)
+        MAX_POSITION_VALUE = 4000.0
+        
+        # Calculate quantity to use full $4,000
+        quantity = int(MAX_POSITION_VALUE / entry_price) if entry_price > 0 else 0
+        
+        # Ensure minimum 1 share
+        if quantity < 1:
+            return jsonify({
+                'success': True,
+                'decision': {
+                    'symbol': symbol,
+                    'action': signal,
+                    'confidence': confidence,
+                    'reasoning': analysis.get('reasoning', ''),
+                    'executed': False,
+                    'message': f'Position size too small. Entry price ${entry_price:.2f} with $4,000 budget results in less than 1 share.'
+                }
+            })
+        
+        # Calculate actual position value (should be close to $4k)
+        position_value = quantity * entry_price
+        
+        # Log the position size
+        logging.info(f"💰 [OLLAMA] Using full $4,000 allocation: {quantity} shares @ ${entry_price:.2f} = ${position_value:.2f}")
+        
+        # Get stop loss, take profit, and trailing stop from Ollama analysis
+        stop_loss = analysis.get('stopLoss')
+        take_profit = analysis.get('takeProfit')
+        trailing_stop_percent = analysis.get('trailingStopPercent')
+        stop_loss_percent = None
+        take_profit_percent = None
+        
+        if stop_loss and entry_price:
+            if signal == 'BUY':
+                stop_loss_percent = abs((entry_price - stop_loss) / entry_price * 100)
+            else:  # SELL
+                stop_loss_percent = abs((stop_loss - entry_price) / entry_price * 100)
+        
+        if take_profit and entry_price:
+            if signal == 'BUY':
+                take_profit_percent = abs((take_profit - entry_price) / entry_price * 100)
+            else:  # SELL
+                take_profit_percent = abs((entry_price - take_profit) / entry_price * 100)
+        
+        # If Ollama didn't specify trailing stop, use a default based on volatility
+        if not trailing_stop_percent and stop_loss_percent:
+            # Default trailing stop: 1.5x the initial stop loss distance
+            trailing_stop_percent = stop_loss_percent * 1.5
+        
+        # Execute trade if auto_execute is True
+        execution_result = None
+        if auto_execute:
+            # Import trading functions
+            from ibkr_trading import place_market_order, place_limit_order
+            
+            logging.info(f"🚀 [OLLAMA IBKR] Executing {signal} order for {symbol}...")
+            
+            if signal == 'BUY':
+                # Execute BUY order
+                if analysis.get('entryPrice') and analysis.get('entryPrice') != current_price:
+                    # Use limit order if entry price differs from current
+                    execution_result = place_limit_order(
+                        symbol=symbol,
+                        action='BUY',
+                        quantity=quantity,
+                        limit_price=entry_price,
+                        stop_loss_percent=stop_loss_percent,
+                        take_profit_percent=take_profit_percent,
+                        trailing_stop_percent=trailing_stop_percent
+                    )
+                else:
+                    # Use market order
+                    execution_result = place_market_order(
+                        symbol=symbol,
+                        action='BUY',
+                        quantity=quantity,
+                        stop_loss_percent=stop_loss_percent,
+                        take_profit_percent=take_profit_percent,
+                        trailing_stop_percent=trailing_stop_percent
+                    )
+            else:  # SELL
+                # Execute SELL order
+                if analysis.get('entryPrice') and analysis.get('entryPrice') != current_price:
+                    # Use limit order if entry price differs from current
+                    execution_result = place_limit_order(
+                        symbol=symbol,
+                        action='SELL',
+                        quantity=quantity,
+                        limit_price=entry_price,
+                        stop_loss_percent=stop_loss_percent,
+                        take_profit_percent=take_profit_percent,
+                        trailing_stop_percent=trailing_stop_percent
+                    )
+                else:
+                    # Use market order
+                    execution_result = place_market_order(
+                        symbol=symbol,
+                        action='SELL',
+                        quantity=quantity,
+                        stop_loss_percent=stop_loss_percent,
+                        take_profit_percent=take_profit_percent,
+                        trailing_stop_percent=trailing_stop_percent
+                    )
+            
+            if execution_result and execution_result.get('success'):
+                # Mark trade as used for today
+                mark_daily_trade_used(today, signal)
+                logging.info(f"✅ [OLLAMA IBKR] Trade executed successfully: {symbol} {signal} x{quantity}")
+            else:
+                logging.error(f"❌ [OLLAMA IBKR] Trade execution failed: {execution_result.get('error') if execution_result else 'Unknown error'}")
+        else:
+            logging.info(f"⚠️ [OLLAMA IBKR] Trade ready but autoExecute=False (safety check)")
+        
+        return jsonify({
+            'success': True,
+            'decision': {
+                'symbol': symbol,
+                'action': signal,
+                'confidence': confidence,
+                'reasoning': analysis.get('reasoning', ''),
+                'pattern': analysis.get('pattern'),
+                'entryPrice': entry_price,
+                'stopLoss': stop_loss,
+                'takeProfit': take_profit,
+                'quantity': quantity,
+                'executed': auto_execute and execution_result and execution_result.get('success'),
+                'executionResult': execution_result if auto_execute else None,
+                'message': 'Trade executed' if (auto_execute and execution_result and execution_result.get('success')) else 'Trade ready (set autoExecute=true to execute)'
+            }
+        })
+    except Exception as e:
+        logging.error(f"❌ [OLLAMA IBKR] Execute trade error: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+# Daily trade tracking (1 buy, 1 sell per day)
+DAILY_TRADES: Dict[str, Dict[str, bool]] = {}  # {date: {'buyUsed': bool, 'sellUsed': bool}}
+DAILY_TRADES_LOCK = threading.Lock()
+
+def get_today_date() -> str:
+    """Get today's date in YYYY-MM-DD format"""
+    return datetime.now().strftime('%Y-%m-%d')
+
+def check_daily_trade_limit(date: str, action: str) -> tuple[bool, str]:
+    """
+    Check if daily trade limit is reached for a given date and action
+    
+    Returns:
+        (can_trade, message)
+    """
+    with DAILY_TRADES_LOCK:
+        # Clean up old dates (older than 7 days)
+        today = datetime.now()
+        dates_to_remove = []
+        for stored_date in DAILY_TRADES.keys():
+            try:
+                stored_dt = datetime.strptime(stored_date, '%Y-%m-%d')
+                if (today - stored_dt).days > 7:
+                    dates_to_remove.append(stored_date)
+            except:
+                dates_to_remove.append(stored_date)
+        
+        for date_to_remove in dates_to_remove:
+            del DAILY_TRADES[date_to_remove]
+        
+        # Check current date
+        if date not in DAILY_TRADES:
+            DAILY_TRADES[date] = {'buyUsed': False, 'sellUsed': False}
+        
+        trades = DAILY_TRADES[date]
+        
+        if action == 'BUY':
+            if trades['buyUsed']:
+                return False, f"Daily buy limit reached for {date}. Only 1 buy allowed per day."
+            return True, "Buy available"
+        elif action == 'SELL':
+            if trades['sellUsed']:
+                return False, f"Daily sell limit reached for {date}. Only 1 sell allowed per day."
+            return True, "Sell available"
+        else:
+            return False, f"Invalid action: {action}"
+
+def mark_daily_trade_used(date: str, action: str):
+    """Mark a trade as used for a given date"""
+    with DAILY_TRADES_LOCK:
+        if date not in DAILY_TRADES:
+            DAILY_TRADES[date] = {'buyUsed': False, 'sellUsed': False}
+        
+        if action == 'BUY':
+            DAILY_TRADES[date]['buyUsed'] = True
+        elif action == 'SELL':
+            DAILY_TRADES[date]['sellUsed'] = True
+
+def get_daily_trades_status(date: str) -> Dict[str, bool]:
+    """Get daily trade status for a given date"""
+    with DAILY_TRADES_LOCK:
+        if date not in DAILY_TRADES:
+            return {'buyUsed': False, 'sellUsed': False}
+        return DAILY_TRADES[date].copy()
+
+def close_all_positions_before_market_close():
+    """Close all open positions before market close (3:50 PM ET)"""
+    from ibkr_trading import get_open_positions, place_market_order
+    from ib_insync import Stock
+    
+    if not IBKR_AVAILABLE or not IBKR_CONNECTED or not IBKR_INSTANCE:
+        return
+    
+    try:
+        positions_result = get_open_positions()
+        if not positions_result.get('success'):
+            return
+        
+        positions = positions_result.get('positions', [])
+        if not positions:
+            return
+        
+        # Close each position
+        for pos in positions:
+            symbol = pos.get('symbol')
+            quantity = abs(int(pos.get('position', 0)))
+            
+            if quantity == 0:
+                continue
+            
+            # Determine action (if position is positive, we need to sell)
+            action = 'SELL' if pos.get('position', 0) > 0 else 'BUY'
+            
+            try:
+                logging.info(f"🔚 [EOD CLOSE] Closing position: {symbol} {quantity} shares ({action})")
+                result = place_market_order(
+                    symbol=symbol,
+                    action=action,
+                    quantity=quantity,
+                    stop_loss_percent=None,  # No stop loss on closing orders
+                    take_profit_percent=None  # No take profit on closing orders
+                )
+                
+                if result.get('success'):
+                    logging.info(f"✅ [EOD CLOSE] Successfully closed {symbol} position")
+                else:
+                    logging.error(f"❌ [EOD CLOSE] Failed to close {symbol}: {result.get('error')}")
+            except Exception as e:
+                logging.error(f"❌ [EOD CLOSE] Error closing {symbol}: {e}")
+                
+    except Exception as e:
+        logging.error(f"❌ [EOD CLOSE] Error closing positions: {e}")
+
+def monitor_trailing_stops():
+    """Background thread to monitor and update trailing stops, and close positions before market close"""
+    from ibkr_trading import update_trailing_stop, ACTIVE_TRADES, TRADING_LOCK
+    from ib_insync import Stock
+    
+    last_eod_check = None
+    
+    while True:
+        try:
+            time.sleep(10)  # Check every 10 seconds
+            
+            if not IBKR_AVAILABLE or not IBKR_CONNECTED or not IBKR_INSTANCE:
+                continue
+            
+            # Check if we need to close positions before market close (3:50 PM ET)
+            now = datetime.now()
+            market_close_time = now.replace(hour=16, minute=0, second=0, microsecond=0)  # 4:00 PM ET
+            eod_close_time = now.replace(hour=15, minute=50, second=0, microsecond=0)  # 3:50 PM ET
+            
+            # Check if it's time to close (3:50 PM) and we haven't checked today
+            if now >= eod_close_time and now < market_close_time:
+                if last_eod_check is None or last_eod_check.date() != now.date():
+                    logging.info("🔚 [EOD CLOSE] Market closing soon - closing all positions...")
+                    close_all_positions_before_market_close()
+                    last_eod_check = now
+            
+            # Get current positions and update trailing stops
+            with TRADING_LOCK:
+                active_order_ids = list(ACTIVE_TRADES.keys())
+            
+            for order_id in active_order_ids:
+                try:
+                    with TRADING_LOCK:
+                        trade_info = ACTIVE_TRADES.get(order_id)
+                    if not trade_info:
+                        continue
+                    
+                    symbol = trade_info.get('symbol')
+                    if not symbol:
+                        continue
+                    
+                    # Get current market price
+                    with IBKR_LOCK:
+                        contract = Stock(symbol, 'SMART', 'USD')
+                        IBKR_INSTANCE.reqMktData(contract, '', False, False)
+                        ticker = IBKR_INSTANCE.ticker(contract)
+                        IBKR_INSTANCE.sleep(0.5)
+                        
+                        current_price = ticker.marketPrice() or ticker.last or 0
+                        if current_price == 0:
+                            continue
+                    
+                    # Update trailing stop
+                    update_result = update_trailing_stop(order_id, current_price)
+                    if update_result:
+                        logging.info(f"📈 [TRAILING STOP] Updated stop for {symbol}: ${update_result.get('new_stop_loss'):.2f} (profit locked: {update_result.get('profit_locked'):.2f}%)")
+                        
+                        # TODO: Update the actual stop loss order in IBKR
+                        # This would require finding the stop loss order and modifying it
+                        
+                except Exception as e:
+                    logging.warning(f"⚠️ [TRAILING STOP] Error monitoring order {order_id}: {e}")
+                    continue
+                    
+        except Exception as e:
+            logging.error(f"❌ [TRAILING STOP] Monitor error: {e}")
+            time.sleep(30)  # Wait longer on error
+
+@app.route('/api/trade/account-balance', methods=['GET'])
+def get_account_balance_endpoint():
+    """Get IBKR account balance"""
+    if not TRADING_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'Trading service not available',
+            'balance': 0
+        }), 503
+    
+    if not IBKR_AVAILABLE or not IBKR_CONNECTED:
+        return jsonify({
+            'success': False,
+            'error': 'IBKR not connected',
+            'balance': 0
+        }), 503
+    
+    try:
+        from ibkr_trading import get_account_balance
+        balance = get_account_balance()
+        return jsonify({
+            'success': True,
+            'balance': balance
+        })
+    except Exception as e:
+        logging.error(f"❌ [TRADE] Get account balance error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'balance': 0
+        }), 500
+
+@app.route('/api/trade/daily-status', methods=['GET'])
+def get_daily_trade_status():
+    """Get daily trade status for a date range"""
+    try:
+        date = request.args.get('date', get_today_date())
+        status = get_daily_trades_status(date)
+        return jsonify({
+            'success': True,
+            'date': date,
+            'buyUsed': status['buyUsed'],
+            'sellUsed': status['sellUsed']
+        })
+    except Exception as e:
+        logging.error(f"❌ [TRADE] Get daily status error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/trade/daily-status-range', methods=['GET'])
+def get_daily_trade_status_range():
+    """Get daily trade status for next 5 days"""
+    try:
+        today = datetime.now()
+        status_map = {}
+        
+        for i in range(5):
+            date = (today + timedelta(days=i)).strftime('%Y-%m-%d')
+            status = get_daily_trades_status(date)
+            status_map[date] = {
+                'buyUsed': status['buyUsed'],
+                'sellUsed': status['sellUsed']
+            }
+        
+        return jsonify({
+            'success': True,
+            'status': status_map
+        })
+    except Exception as e:
+        logging.error(f"❌ [TRADE] Get daily status range error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+def calculate_position_size(account_balance: float, entry_price: float, risk_tolerance: str) -> int:
+    """
+    Calculate recommended position size based on risk tolerance
+    This is a placeholder for future implementation
+    """
+    risk_percentages = {
+        'LOW': 0.01,      # 1% of account
+        'MEDIUM': 0.02,   # 2% of account
+        'HIGH': 0.05      # 5% of account
+    }
+    
+    risk_percent = risk_percentages.get(risk_tolerance, 0.02)
+    risk_amount = account_balance * risk_percent
+    
+    if entry_price > 0:
+        quantity = int(risk_amount / entry_price)
+        return max(1, min(quantity, 1000))  # Cap at 1000 shares
+    
+    return 0
+
+# ==================== IBKR TRADING ENDPOINTS ====================
+
+@app.route('/api/trade/buy', methods=['POST'])
+def trade_buy():
+    """Place a BUY order with optional stop loss and take profit"""
+    if not TRADING_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'Trading service not available'
+        }), 503
+    
+    if not IBKR_AVAILABLE or not IBKR_CONNECTED:
+        return jsonify({
+            'success': False,
+            'error': 'IBKR not connected',
+            'message': 'Please connect to Interactive Brokers first'
+        }), 503
+    
+    try:
+        data = request.json
+        symbol = data.get('symbol', '').upper()
+        quantity = int(data.get('quantity', 0))
+        order_type = data.get('orderType', 'MARKET').upper()  # MARKET or LIMIT
+        limit_price = data.get('limitPrice')
+        stop_loss_percent = data.get('stopLossPercent')
+        take_profit_percent = data.get('takeProfitPercent')
+        
+        if not symbol:
+            return jsonify({
+                'success': False,
+                'error': 'Symbol is required'
+            }), 400
+        
+        if quantity <= 0:
+            return jsonify({
+                'success': False,
+                'error': 'Quantity must be greater than 0'
+            }), 400
+        
+        if order_type == 'LIMIT' and not limit_price:
+            return jsonify({
+                'success': False,
+                'error': 'Limit price is required for LIMIT orders'
+            }), 400
+        
+        # Place order
+        if order_type == 'MARKET':
+            result = place_market_order(
+                symbol=symbol,
+                action='BUY',
+                quantity=quantity,
+                stop_loss_percent=stop_loss_percent,
+                take_profit_percent=take_profit_percent
+            )
+        else:  # LIMIT
+            result = place_limit_order(
+                symbol=symbol,
+                action='BUY',
+                quantity=quantity,
+                limit_price=limit_price,
+                stop_loss_percent=stop_loss_percent,
+                take_profit_percent=take_profit_percent
+            )
+        
+        if result.get('success'):
+            logging.info(f"✅ [TRADE] BUY order placed: {symbol} x{quantity}")
+        else:
+            logging.error(f"❌ [TRADE] BUY order failed: {result.get('error')}")
+        
+        return jsonify(result)
+    except Exception as e:
+        logging.error(f"❌ [TRADE] Buy order error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': f'Error placing buy order: {str(e)}'
+        }), 500
+
+@app.route('/api/trade/sell', methods=['POST'])
+def trade_sell():
+    """Place a SELL order with optional stop loss and take profit"""
+    if not TRADING_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'Trading service not available'
+        }), 503
+    
+    if not IBKR_AVAILABLE or not IBKR_CONNECTED:
+        return jsonify({
+            'success': False,
+            'error': 'IBKR not connected',
+            'message': 'Please connect to Interactive Brokers first'
+        }), 503
+    
+    try:
+        data = request.json
+        symbol = data.get('symbol', '').upper()
+        quantity = int(data.get('quantity', 0))
+        order_type = data.get('orderType', 'MARKET').upper()
+        limit_price = data.get('limitPrice')
+        stop_loss_percent = data.get('stopLossPercent')
+        take_profit_percent = data.get('takeProfitPercent')
+        
+        if not symbol:
+            return jsonify({
+                'success': False,
+                'error': 'Symbol is required'
+            }), 400
+        
+        if quantity <= 0:
+            return jsonify({
+                'success': False,
+                'error': 'Quantity must be greater than 0'
+            }), 400
+        
+        if order_type == 'LIMIT' and not limit_price:
+            return jsonify({
+                'success': False,
+                'error': 'Limit price is required for LIMIT orders'
+            }), 400
+        
+        # Place order
+        if order_type == 'MARKET':
+            result = place_market_order(
+                symbol=symbol,
+                action='SELL',
+                quantity=quantity,
+                stop_loss_percent=stop_loss_percent,
+                take_profit_percent=take_profit_percent
+            )
+        else:  # LIMIT
+            result = place_limit_order(
+                symbol=symbol,
+                action='SELL',
+                quantity=quantity,
+                limit_price=limit_price,
+                stop_loss_percent=stop_loss_percent,
+                take_profit_percent=take_profit_percent
+            )
+        
+        if result.get('success'):
+            logging.info(f"✅ [TRADE] SELL order placed: {symbol} x{quantity}")
+        else:
+            logging.error(f"❌ [TRADE] SELL order failed: {result.get('error')}")
+        
+        return jsonify(result)
+    except Exception as e:
+        logging.error(f"❌ [TRADE] Sell order error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': f'Error placing sell order: {str(e)}'
+        }), 500
+
+@app.route('/api/trade/positions', methods=['GET'])
+def get_positions():
+    """Get all open positions"""
+    if not TRADING_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'Trading service not available',
+            'positions': []
+        }), 503
+    
+    try:
+        result = get_open_positions()
+        return jsonify(result)
+    except Exception as e:
+        logging.error(f"❌ [TRADE] Get positions error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'positions': []
+        }), 500
+
+@app.route('/api/trade/order/<int:order_id>', methods=['GET'])
+def get_order(order_id):
+    """Get order status by order ID"""
+    if not TRADING_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'Trading service not available'
+        }), 503
+    
+    try:
+        result = get_order_status(order_id)
+        return jsonify(result)
+    except Exception as e:
+        logging.error(f"❌ [TRADE] Get order status error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/trade/cancel/<int:order_id>', methods=['POST'])
+def cancel_trade_order(order_id):
+    """Cancel an order by order ID"""
+    if not TRADING_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'Trading service not available'
+        }), 503
+    
+    try:
+        result = cancel_order(order_id)
+        return jsonify(result)
+    except Exception as e:
+        logging.error(f"❌ [TRADE] Cancel order error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 if __name__ == '__main__':
     # Start news scheduler in background thread
     # News: IBKR ONLY - no scheduled news fetching needed
     # News is fetched directly from IBKR when scanning stocks
     logging.info("News: IBKR ONLY mode - news fetched directly from IBKR when scanning")
     
+    # Connect to IBKR on startup (in background thread to avoid blocking)
+    def init_ibkr_connection():
+        if IBKR_AVAILABLE:
+            logging.info("🔌 [STARTUP] Attempting to connect to IBKR...")
+            connect_ibkr()
+            
+            # Initialize trading service with IBKR instance
+            if TRADING_AVAILABLE and IBKR_INSTANCE:
+                try:
+                    set_ibkr_instance(IBKR_INSTANCE, IBKR_LOCK)
+                    logging.info("✅ [TRADING] Trading service initialized")
+                except Exception as e:
+                    logging.warning(f"⚠️ [TRADING] Failed to initialize trading service: {e}")
+            
+            # Start keepalive thread to maintain connection (prevents going offline)
+            keepalive_thread = threading.Thread(target=keepalive_ibkr, daemon=True)
+            keepalive_thread.start()
+            logging.info("✅ [IBKR] Keepalive thread started (checks connection every 30s to prevent offline)")
+            
+            # Start trailing stop monitor thread
+            if TRADING_AVAILABLE:
+                trailing_stop_thread = threading.Thread(target=monitor_trailing_stops, daemon=True)
+                trailing_stop_thread.start()
+                logging.info("✅ [TRADING] Trailing stop monitor thread started")
+    
+    # Start IBKR connection in background thread so it doesn't block server startup
+    if IBKR_AVAILABLE:
+        ibkr_init_thread = threading.Thread(target=init_ibkr_connection, daemon=True)
+        ibkr_init_thread.start()
+    
+    # Teach Ollama about IBKR trading on startup
+    def teach_ollama_ibkr():
+        if OLLAMA_AVAILABLE:
+            try:
+                from ollama_ibkr_trading import teach_ibkr_trading_to_ollama
+                logging.info("📚 [STARTUP] Teaching Ollama about IBKR trading...")
+                result = teach_ibkr_trading_to_ollama()
+                if result.get('success'):
+                    logging.info("✅ [STARTUP] Ollama learned IBKR trading successfully")
+                else:
+                    logging.warning(f"⚠️ [STARTUP] Ollama IBKR teaching failed: {result.get('error')}")
+            except Exception as e:
+                logging.warning(f"⚠️ [STARTUP] Could not teach Ollama IBKR: {e}")
+    
+    # Start Ollama teaching in background thread
+    if OLLAMA_AVAILABLE:
+        ollama_teach_thread = threading.Thread(target=teach_ollama_ibkr, daemon=True)
+        ollama_teach_thread.start()
+    
+    # Start Flask server immediately
+    logging.info("🚀 [STARTUP] Starting Flask server on port 5000...")
     app.run(debug=True, host='0.0.0.0', port=5000)

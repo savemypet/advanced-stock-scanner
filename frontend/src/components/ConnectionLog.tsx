@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { Activity, ChevronDown, ChevronUp, Wifi, WifiOff, AlertCircle, CheckCircle, X } from 'lucide-react'
+import { Activity, ChevronDown, ChevronUp, Wifi, WifiOff, AlertCircle, CheckCircle, X, Copy, Check } from 'lucide-react'
+import { toast } from 'sonner'
 
 interface LogEntry {
   id: string
@@ -18,6 +19,7 @@ export default function ConnectionLog({ isOpen, onToggle }: ConnectionLogProps) 
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'checking'>('checking')
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
+  const [logsCopied, setLogsCopied] = useState(false)
   const logEndRef = useRef<HTMLDivElement>(null)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
 
@@ -31,6 +33,7 @@ export default function ConnectionLog({ isOpen, onToggle }: ConnectionLogProps) 
   // Poll for connection status and logs
   useEffect(() => {
     let lastLogCount = 0
+    let statusLogged = false
     
     const fetchStatusAndLogs = async () => {
       try {
@@ -40,19 +43,22 @@ export default function ConnectionLog({ isOpen, onToggle }: ConnectionLogProps) 
         setConnectionStatus(healthData.ibkrConnected ? 'connected' : 'disconnected')
         setLastUpdate(new Date())
         
-        // Add detailed status log with error info
-        if (healthData.ibkrConnected) {
-          addLog(
-            'success',
-            `IBKR Connected`,
-            `Host: ${healthData.ibkrHost || 'N/A'}, Port: ${healthData.ibkrPort || 'N/A'}, Username: ${healthData.ibkrUsername || 'N/A'}`
-          )
-        } else {
-          addLog(
-            'error',
-            `IBKR Disconnected`,
-            healthData.connectionError || `Host: ${healthData.ibkrHost || 'N/A'}, Port: ${healthData.ibkrPort || 'N/A'}. Check TWS/IB Gateway is running and API is enabled.`
-          )
+        // Add detailed status log with error info (only once per status change)
+        if (!statusLogged) {
+          if (healthData.ibkrConnected) {
+            addLog(
+              'success',
+              `IBKR Connected`,
+              `Host: ${healthData.ibkrHost || 'N/A'}, Port: ${healthData.ibkrPort || 'N/A'}, Username: ${healthData.ibkrUsername || 'N/A'}`
+            )
+          } else {
+            addLog(
+              'error',
+              `IBKR Disconnected`,
+              healthData.connectionError || `Host: ${healthData.ibkrHost || 'N/A'}, Port: ${healthData.ibkrPort || 'N/A'}. Check TWS/IB Gateway is running and API is enabled.`
+            )
+          }
+          statusLogged = true
         }
         
         // Fetch detailed logs from backend
@@ -89,7 +95,10 @@ export default function ConnectionLog({ isOpen, onToggle }: ConnectionLogProps) 
         }
       } catch (error) {
         setConnectionStatus('disconnected')
-        addLog('error', 'Backend not responding', `Cannot reach backend API: ${error instanceof Error ? error.message : 'Unknown error'}`)
+        if (!statusLogged) {
+          addLog('error', 'Backend not responding', `Cannot reach backend API: ${error instanceof Error ? error.message : 'Unknown error'}`)
+          statusLogged = true
+        }
       }
     }
 
@@ -104,7 +113,7 @@ export default function ConnectionLog({ isOpen, onToggle }: ConnectionLogProps) 
         clearInterval(intervalRef.current)
       }
     }
-  }, [])
+  }, [isOpen]) // Re-run when panel opens/closes
 
   // Listen to console logs from the app
   useEffect(() => {
@@ -172,6 +181,63 @@ export default function ConnectionLog({ isOpen, onToggle }: ConnectionLogProps) 
     setLogs([])
   }
 
+  const copyLogs = async () => {
+    if (logs.length === 0) {
+      toast.error('No logs to copy')
+      return
+    }
+
+    try {
+      // Fetch health status for additional context
+      let healthInfo = ''
+      try {
+        const healthResponse = await fetch('/api/health')
+        const healthData = await healthResponse.json()
+        healthInfo = `\n\n=== BACKEND HEALTH ===\n`
+        healthInfo += `Status: ${healthData.status}\n`
+        healthInfo += `IBKR Available: ${healthData.ibkrAvailable}\n`
+        healthInfo += `IBKR Connected: ${healthData.ibkrConnected}\n`
+        healthInfo += `IBKR Host: ${healthData.ibkrHost}\n`
+        healthInfo += `IBKR Port: ${healthData.ibkrPort}\n`
+        healthInfo += `IBKR Username: ${healthData.ibkrUsername}\n`
+        if (healthData.connectionError) {
+          healthInfo += `Connection Error: ${healthData.connectionError}\n`
+        }
+        healthInfo += `Timestamp: ${healthData.timestamp}\n`
+      } catch (e) {
+        healthInfo = `\n\n=== BACKEND HEALTH ===\nError fetching health status\n`
+      }
+
+      // Format logs
+      const logText = `========================================\n`
+        + `IBKR CONNECTION LOGS\n`
+        + `Generated: ${new Date().toLocaleString()}\n`
+        + `========================================\n`
+        + healthInfo
+        + `\n=== LOG ENTRIES (${logs.length}) ===\n\n`
+        + logs.map(log => {
+          const timestamp = log.timestamp.toLocaleString()
+          const type = log.type.toUpperCase()
+          let logLine = `[${timestamp}] [${type}] ${log.message}`
+          if (log.details) {
+            logLine += `\n  Details: ${log.details}`
+          }
+          return logLine
+        }).join('\n\n')
+        + `\n\n========================================\n`
+        + `END OF LOGS\n`
+        + `========================================\n`
+
+      await navigator.clipboard.writeText(logText)
+      setLogsCopied(true)
+      toast.success('Logs copied to clipboard!')
+      setTimeout(() => setLogsCopied(false), 3000)
+    } catch (error) {
+      console.error('Failed to copy logs:', error)
+      toast.error('Failed to copy logs')
+    }
+  }
+
   const getLogIcon = (type: LogEntry['type']) => {
     switch (type) {
       case 'success':
@@ -230,16 +296,33 @@ export default function ConnectionLog({ isOpen, onToggle }: ConnectionLogProps) 
         </div>
         <div className="flex items-center gap-2">
           {isOpen && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                clearLogs()
-              }}
-              className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded"
-              title="Clear logs"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            <>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  copyLogs()
+                }}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded transition-colors"
+                title="Copy logs to clipboard"
+              >
+                {logsCopied ? (
+                  <Check className="w-4 h-4 text-green-500" />
+                ) : (
+                  <Copy className="w-4 h-4" />
+                )}
+                <span className="hidden sm:inline">{logsCopied ? 'Copied!' : 'Copy'}</span>
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  clearLogs()
+                }}
+                className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded"
+                title="Clear logs"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </>
           )}
           {isOpen ? (
             <ChevronDown className="w-4 h-4 text-muted-foreground" />

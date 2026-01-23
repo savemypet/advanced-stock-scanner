@@ -4,6 +4,8 @@ import { X, TrendingUp, TrendingDown, Activity, BarChart3, Newspaper, ExternalLi
 import BookmapChart from './BookmapChart'
 import CandlestickOnlyChart from './CandlestickOnlyChart'
 import PriceBox from './PriceBox'
+import OllamaAnalysis from './OllamaAnalysis'
+import TradingPanel from './TradingPanel'
 import { formatNumber, formatCurrency } from '../utils/formatters'
 import { PatternSignal } from '../utils/candlestickPatterns'
 import { getStockNews } from '../api/stockNewsApi'
@@ -584,6 +586,16 @@ export default function StockDetailModal({ stock, onClose }: StockDetailModalPro
               </span>
             </div>
           )}
+        </div>
+
+        {/* AI Ollama Analysis Section */}
+        <div className="px-6 py-4 border-t border-border" data-ai-analysis>
+          <OllamaAnalysis stock={stock} />
+        </div>
+
+        {/* Trading Panel */}
+        <div className="px-6 py-4">
+          <TradingPanel stock={stock} />
         </div>
 
         {/* Additional Info */}

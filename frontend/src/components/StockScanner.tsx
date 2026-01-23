@@ -8,6 +8,7 @@ interface StockScannerProps {
   settings: ScannerSettings
   countdown: number
   onStockClick?: (stock: Stock) => void
+  onAIAnalysisClick?: (stock: Stock) => void
 }
 
 export default function StockScanner({ stocks, isLoading, settings, countdown, onStockClick }: StockScannerProps) {
@@ -24,7 +25,7 @@ export default function StockScanner({ stocks, isLoading, settings, countdown, o
               Searching for stocks matching your criteria
             </p>
             <p className="text-xs text-muted-foreground bg-muted/30 rounded-lg p-2">
-              Looking for: {settings.maxFloat / 1_000_000}M float, {settings.minGainPercent}% gain, {settings.volumeMultiplier}x volume
+              Looking for: {settings.minGainPercent}% gain, {settings.volumeMultiplier}x volume
             </p>
             <div className="mt-4 flex items-center justify-center gap-2">
               <div className="w-2 h-2 rounded-full bg-primary animate-bounce" style={{ animationDelay: '0ms' }} />
@@ -91,14 +92,13 @@ export default function StockScanner({ stocks, isLoading, settings, countdown, o
               <p className="font-medium mb-2">Current Filters:</p>
               <ul className="space-y-1 text-muted-foreground">
                 <li>• Price: ${settings.minPrice} - ${settings.maxPrice}</li>
-                <li>• Max Float: {(settings.maxFloat / 1_000_000).toFixed(0)}M shares</li>
                 <li>• Min Gain: {settings.minGainPercent}%</li>
                 <li>• Volume: {settings.volumeMultiplier}x average</li>
               </ul>
             </div>
             
             <p className="text-xs text-muted-foreground mt-6">
-              💡 Tip: Try lowering the minimum gain % or increasing max float if no stocks appear
+              💡 Tip: Try lowering the minimum gain % or increasing volume multiplier if no stocks appear
             </p>
           </>
         )}
@@ -114,7 +114,7 @@ export default function StockScanner({ stocks, isLoading, settings, countdown, o
             Qualifying Stocks ({stocks.length})
           </h2>
           <p className="text-xs sm:text-sm text-muted-foreground">
-            Sorted by highest gain percentage • {settings.maxFloat / 1_000_000}M float • {settings.minGainPercent}% gain • {settings.volumeMultiplier}x volume
+            Sorted by highest gain percentage • {settings.minGainPercent}% gain • {settings.volumeMultiplier}x volume
           </p>
         </div>
         
@@ -145,6 +145,7 @@ export default function StockScanner({ stocks, isLoading, settings, countdown, o
             stock={stock} 
             timeframe={settings.chartTimeframe}
             onClick={() => onStockClick?.(stock)}
+            onAIAnalysisClick={onAIAnalysisClick}
           />
         ))}
       </div>

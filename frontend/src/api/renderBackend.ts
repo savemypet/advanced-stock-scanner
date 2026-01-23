@@ -77,7 +77,7 @@ export async function scanStocks(criteria: ScanCriteria): Promise<ScanResult> {
     symbols: criteria.symbols,
     minPrice: criteria.minPrice ?? 1,
     maxPrice: criteria.maxPrice ?? 200,
-    maxFloat: criteria.maxFloat ?? 500000000,
+    // maxFloat removed - no longer filtering by float
     minGainPercent: criteria.minGainPercent ?? 2,
     volumeMultiplier: criteria.volumeMultiplier ?? 1.5,
     userId: criteria.userId, // Optional: For push notifications when news is found

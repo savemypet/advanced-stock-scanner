@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Toaster, toast } from 'sonner'
-import { Settings, TrendingUp, RefreshCw, Play, Pause, Search, X, Activity } from 'lucide-react'
+import { Settings, TrendingUp, RefreshCw, Search, X, Activity, Square } from 'lucide-react'
 import StockScanner from './components/StockScanner'
 import SimulatedScanner from './components/SimulatedScanner'
 import SettingsPanel from './components/SettingsPanel'
@@ -27,6 +27,7 @@ function App() {
   const [showConnectionLog, setShowConnectionLog] = useState<boolean>(false)
   // IBKR only mode - no rate limits, removed rate limit state
   const [refreshCooldown, setRefreshCooldown] = useState<number>(0)
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
   const countdownRef = useRef<NodeJS.Timeout | null>(null)
   // Removed readyTimerRef - no rate limit countdown needed
@@ -34,16 +35,15 @@ function App() {
   const previousStocksRef = useRef<Set<string>>(new Set())
   
   const [settings, setSettings] = useState<ScannerSettings>({
-    minPrice: 1,
-    maxPrice: 6,
-    maxFloat: 10_000_000, // 10M shares - low float for volatile stocks
-    minGainPercent: 10, // 10% - only explosive movers
-    volumeMultiplier: 4, // 4x - EXPLOSIVE volume only
-    displayCount: 10, // Show 10 stocks
+    minPrice: 0.10, // Very lenient - show more stocks (penny stocks)
+    maxPrice: 200, // Wide range to catch more stocks
+    minGainPercent: 0.1, // Very lenient - show any gain (0.1% minimum)
+    volumeMultiplier: 1.0, // Very lenient - show any volume (no minimum increase)
+    displayCount: 20, // Show more stocks
     chartTimeframe: '5m',
     autoAdd: true,
     realTimeUpdates: true, // AUTO-SCAN ENABLED - dynamically adjusts to API availability
-    updateInterval: 60, // 60 seconds - optimal scan interval (based on ~30s average scan time)
+    updateInterval: 90, // 90 seconds - optimal scan interval for IBKR (3 symbols × ~15s = ~45s + 45s buffer)
     notificationsEnabled: true,
     notifyOnNewStocks: true,
     // IBKR ONLY - no other APIs
@@ -63,7 +63,6 @@ function App() {
     console.log(`🔍 [SCANNER] Scan criteria:`, {
       minPrice: settings.minPrice,
       maxPrice: settings.maxPrice,
-      maxFloat: settings.maxFloat,
       minGainPercent: settings.minGainPercent,
       volumeMultiplier: settings.volumeMultiplier,
       displayCount: settings.displayCount,
@@ -85,6 +84,15 @@ function App() {
       if (result.success) {
         const newStocks = result.stocks || []
         console.log(`✅ [SCANNER] Got ${newStocks.length} stocks from scan`)
+        console.log(`✅ [SCANNER] Stocks data:`, {
+          count: newStocks.length,
+          firstStock: newStocks[0] ? {
+            symbol: newStocks[0].symbol,
+            name: newStocks[0].name,
+            price: newStocks[0].currentPrice,
+            gain: newStocks[0].changePercent
+          } : null
+        })
         
         // 🧠 AI PATTERN DETECTION: Analyze candlestick patterns on real stocks
         const stocksWithPatterns = newStocks.map(stock => {
@@ -151,14 +159,33 @@ function App() {
         setStocks(stocksWithPatterns)
         // Also feed stocks to simulated section (both sections share the same stocks)
         setLastUpdate(new Date())
+        setIsRefreshing(false) // Reset refreshing state when scan completes
+        setIsLoading(false) // Reset loading state
         const totalElapsed = ((Date.now() - scanStart) / 1000).toFixed(1)
         console.log(`✅ [SCANNER] ===== SCAN COMPLETE ===== (${totalElapsed}s total)`)
       } else {
-        // Handle failed scan (e.g., timeout)
+        // Handle failed scan (e.g., timeout, IBKR connection error)
         const totalElapsed = ((Date.now() - scanStart) / 1000).toFixed(1)
         console.warn(`⚠️ [SCANNER] Scan failed after ${totalElapsed}s:`, result.error || 'Unknown error')
         console.warn(`⚠️ [SCANNER] API Status:`, result.apiStatus)
+        
+        // Show user-friendly error message for IBKR connection issues
+        if (result.error && result.error.includes('IBKR connection')) {
+          const errorDetails = result.errorDetails || {}
+          toast.error(
+            `❌ IBKR Connection Failed: ${result.error}`,
+            {
+              description: errorDetails.suggestion || 'Please ensure IB Gateway or TWS is running and API is enabled.',
+              duration: 8000
+            }
+          )
+        } else if (result.error) {
+          toast.error(`❌ Scan Failed: ${result.error}`, { duration: 5000 })
+        }
+        
         // Keep existing stocks, don't clear them on timeout
+        setIsRefreshing(false) // Reset refreshing state on failure
+        setIsLoading(false) // Reset loading state
       }
     } catch (error: any) {
       const totalElapsed = ((Date.now() - scanStart) / 1000).toFixed(1)
@@ -175,12 +202,17 @@ function App() {
     } finally {
       // Always reset loading state, even on timeout/error
       setIsLoading(false)
+      setIsRefreshing(false) // Reset refreshing state on error/timeout
       console.log(`🏁 [SCANNER] Scan finished, loading state reset`)
     }
   }, [settings])
 
-  // Don't auto-scan on mount - wait for user to start
-  // User must click Start/Play, Refresh, or apply preset/settings
+  // Auto-scan on mount to show stocks immediately
+  useEffect(() => {
+    // Start initial scan immediately when app loads
+    console.log('🚀 [APP] Auto-starting initial scan...')
+    performScan()
+  }, []) // Run once on mount
 
   // IBKR only mode - no rate limits, no countdown needed
   // Removed rate limit countdown timer
@@ -235,17 +267,36 @@ function App() {
           clearInterval(refreshCooldownRef.current)
         }
       }
+    } else {
+      // Clear cooldown ref when cooldown reaches 0
+      if (refreshCooldownRef.current) {
+        clearInterval(refreshCooldownRef.current)
+        refreshCooldownRef.current = null
+      }
     }
   }, [refreshCooldown])
 
-  const handleRefresh = () => {
-    // Manual refresh - scan immediately and start 20s lockout
-    setIsLoading(true)
-    performScan()
+  const handleRefresh = useCallback(() => {
+    // Prevent multiple simultaneous refreshes
+    if (isRefreshing || isLoading) {
+      console.log('⏸️ [REFRESH] Already refreshing, ignoring click')
+      return
+    }
     
-    // Start 20-second cooldown lockout
-    setRefreshCooldown(20)
-  }
+    // Manual refresh - scan immediately
+    console.log('🔄 [REFRESH] Manual refresh triggered')
+    setIsRefreshing(true)
+    setIsLoading(true)
+    
+    // Perform scan and handle completion
+    performScan().finally(() => {
+      // Reset refreshing state after scan completes (or fails)
+      setIsRefreshing(false)
+      
+      // Start 20-second cooldown to prevent spam
+      setRefreshCooldown(20)
+    })
+  }, [isRefreshing, isLoading, performScan])
 
   const handleSettingsUpdate = (newSettings: ScannerSettings) => {
     setSettings(newSettings)
@@ -260,6 +311,25 @@ function App() {
     setSettings(newSettings)
     // No popup notifications - silent toggle
   }
+
+  const handleStopScanner = useCallback(() => {
+    // Stop auto-scanning
+    const newSettings = { ...settings, realTimeUpdates: false }
+    setSettings(newSettings)
+    
+    // Clear intervals immediately
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current)
+      intervalRef.current = null
+    }
+    if (countdownRef.current) {
+      clearInterval(countdownRef.current)
+      countdownRef.current = null
+    }
+    
+    setCountdown(0)
+    console.log('🛑 [SCANNER] Scanner stopped by user')
+  }, [settings])
 
   const handleSearchStock = async () => {
     if (!searchSymbol.trim()) {
@@ -443,7 +513,7 @@ function App() {
                 <p className="text-xs sm:text-sm text-muted-foreground hidden sm:block">
                   {viewMode === 'simulated' 
                     ? 'Interactive demo with simulated data - test all features!'
-                    : 'Real-time low-float, high-volume discovery'
+                    : 'Real-time high-volume stock discovery'
                   }
                 </p>
               </div>
@@ -452,61 +522,54 @@ function App() {
             {/* Actions - Responsive (only show in live mode) */}
             {viewMode === 'live' && (
               <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
-                {/* Last Update - Hidden on mobile */}
-                <div className="text-right mr-2 hidden md:block">
-                  <p className="text-xs text-muted-foreground">Last Update</p>
-                  <p className="text-sm font-medium flex items-center gap-2">
-                    {lastUpdate.toLocaleTimeString()}
-                    {isLoading && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/20 text-xs text-primary">
-                        <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-                        Scanning...
-                      </span>
-                    )}
-                  </p>
-                </div>
+                {/* Stop Button - Only show when scanner is running */}
+                {settings.realTimeUpdates && (
+                  <button
+                    onClick={handleStopScanner}
+                    className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg bg-red-500 text-white hover:bg-red-600 transition-colors min-w-[100px] sm:min-w-[110px]"
+                    aria-label="Stop Scanner"
+                    title="Stop auto-scanning"
+                  >
+                    <Square className="w-4 h-4" />
+                    <span className="text-sm font-medium">Stop</span>
+                  </button>
+                )}
                 
-                {/* Auto-Refresh Toggle */}
-                <button
-                  onClick={toggleAutoRefresh}
-                  className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-lg transition-colors ${
-                    settings.realTimeUpdates 
-                      ? 'bg-green-500 text-white hover:bg-green-600' 
-                      : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                  }`}
-                  title={settings.realTimeUpdates ? 'Pause auto-refresh' : 'Start auto-refresh'}
-                >
-                  {settings.realTimeUpdates ? (
-                    <>
-                      <Pause className="w-4 h-4" />
-                      <span className="hidden sm:inline text-sm font-medium">Pause</span>
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-4 h-4" />
-                      <span className="hidden sm:inline text-sm font-medium">Start</span>
-                    </>
-                  )}
-                </button>
-                
-                {/* Refresh Button */}
+                {/* Combined Scan Button - Shows last scan time and next scan countdown */}
                 <button
                   onClick={handleRefresh}
-                  disabled={refreshCooldown > 0}
-                  className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  aria-label="Refresh"
+                  disabled={isLoading || isRefreshing || refreshCooldown > 0}
+                  className="flex flex-col items-end gap-1 px-3 sm:px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-w-[120px] sm:min-w-[140px]"
+                  aria-label="Scan Stocks"
                   title={
                     refreshCooldown > 0
                       ? `⏳ Cooldown: ${refreshCooldown}s`
-                      : isLoading
-                      ? 'Scanning...'
-                      : 'Refresh stock data now'
+                      : isLoading || isRefreshing
+                      ? 'Scanning in progress...'
+                      : 'Scan stocks now'
                   }
                 >
-                  <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-                  <span className="hidden sm:inline">
-                    {refreshCooldown > 0 ? `${refreshCooldown}s` : isLoading ? 'Scanning...' : 'Refresh'}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <RefreshCw className={`w-4 h-4 ${(isLoading || isRefreshing) ? 'animate-spin' : ''}`} />
+                    <span className="text-sm font-medium">
+                      {refreshCooldown > 0 
+                        ? `Wait ${refreshCooldown}s` 
+                        : isLoading || isRefreshing
+                        ? 'Scanning...' 
+                        : 'Scan Now'}
+                    </span>
+                  </div>
+                  <div className="text-xs text-primary-foreground/70">
+                    {isLoading || isRefreshing ? (
+                      <span>Scanning...</span>
+                    ) : refreshCooldown > 0 ? (
+                      <span>Next scan in {refreshCooldown}s</span>
+                    ) : settings.realTimeUpdates && countdown > 0 ? (
+                      <span>Next: {countdown}s</span>
+                    ) : (
+                      <span>Last: {lastUpdate.toLocaleTimeString()}</span>
+                    )}
+                  </div>
                 </button>
               </div>
             )}
@@ -554,6 +617,16 @@ function App() {
                   settings={settings}
                   countdown={countdown}
                   onStockClick={(stock) => setSelectedStock(stock)}
+                  onAIAnalysisClick={(stock) => {
+                    setSelectedStock(stock)
+                    // Scroll to AI analysis section after modal opens
+                    setTimeout(() => {
+                      const aiSection = document.querySelector('[data-ai-analysis]')
+                      if (aiSection) {
+                        aiSection.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                      }
+                    }, 300)
+                  }}
                 />
               )}
             </div>

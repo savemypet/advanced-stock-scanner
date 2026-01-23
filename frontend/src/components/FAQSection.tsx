@@ -25,7 +25,7 @@ const faqData: FAQItem[] = [
   {
     category: "Getting Started",
     question: "Why don't I see any stocks?",
-    answer: "Your filters might be too strict! Try: 1) Lower Min Gain % (try 5% instead of 10%), 2) Increase Max Float (try 50M or 100M), 3) Lower Volume Multiplier (try 2x or 3x), or 4) Use the 'Penny Stocks' preset which has looser filters.",
+    answer: "Your filters might be too strict! Try: 1) Lower Min Gain % (try 5% instead of 10%), 2) Lower Volume Multiplier (try 2x or 3x), or 3) Use the 'Penny Stocks' preset which has looser filters.",
     icon: <HelpCircle className="w-4 h-4" />
   },
 
@@ -64,12 +64,6 @@ const faqData: FAQItem[] = [
   // Filters
   {
     category: "Filters & Settings",
-    question: "What is 'Max Float' and why does it matter?",
-    answer: "Float = Number of shares available for trading. Lower float = Higher volatility (price moves faster). Set to 10M for explosive moves, or 100M for penny stocks. Lower float stocks can have bigger percentage gains!",
-    icon: <SettingsIcon className="w-4 h-4" />
-  },
-  {
-    category: "Filters & Settings",
     question: "What is 'Min Gain %'?",
     answer: "The minimum percentage gain required for a stock to appear. 10% = Only shows stocks up 10% or more. Lower it to 2-5% to see more stocks. Higher values (15-20%) = Only the most explosive movers.",
     icon: <SettingsIcon className="w-4 h-4" />
@@ -83,7 +77,7 @@ const faqData: FAQItem[] = [
   {
     category: "Filters & Settings",
     question: "What's the difference between Penny Stocks and Explosive Mode?",
-    answer: "Penny Stocks ($0.05-$1): Higher float (100M), cheaper stocks, more options. Explosive Mode ($1-$20): Strict float (10M), higher quality, bigger gains potential. Both require 10% gain and 5x volume.",
+    answer: "Penny Stocks ($0.05-$1): Cheaper stocks, more options. Explosive Mode ($1-$20): Higher quality, bigger gains potential. Both require 10% gain and 5x volume.",
     icon: <SettingsIcon className="w-4 h-4" />
   },
 

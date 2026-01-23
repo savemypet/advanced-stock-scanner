@@ -1,5 +1,5 @@
 import { Stock, ChartTimeframe } from '../types'
-import { TrendingUp, TrendingDown, Activity, BarChart3, Newspaper } from 'lucide-react'
+import { TrendingUp, TrendingDown, Activity, BarChart3, Newspaper, Brain } from 'lucide-react'
 import PriceBox from './PriceBox'
 import { formatNumber, formatCurrency } from '../utils/formatters'
 
@@ -7,6 +7,7 @@ interface StockCardProps {
   stock: Stock
   timeframe: ChartTimeframe
   onClick?: () => void
+  onAIAnalysisClick?: (stock: Stock) => void
 }
 
 export default function StockCard({ stock, timeframe, onClick }: StockCardProps) {
@@ -64,6 +65,18 @@ export default function StockCard({ stock, timeframe, onClick }: StockCardProps)
                 {stock.newsCount} News
               </span>
             )}
+            {/* AI Analysis Button */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                onAIAnalysisClick?.(stock)
+              }}
+              className="px-2 py-1 text-xs font-semibold rounded-full bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 border border-purple-500/30 flex items-center gap-1 transition-colors"
+              title="Get AI Analysis (Ollama)"
+            >
+              <Brain className="w-3 h-3" />
+              AI
+            </button>
           </div>
           <p className="text-sm sm:text-base font-medium text-foreground mb-0.5">{stock.name}</p>
           <p className="text-xs text-muted-foreground">

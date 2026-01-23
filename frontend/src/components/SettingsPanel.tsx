@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react'
 import { ScannerSettings, ChartTimeframe } from '../types'
-import { X, DollarSign, TrendingUp, BarChart3, Bell, Clock, Hash, HelpCircle, Globe, CheckCircle, XCircle, AlertTriangle } from 'lucide-react'
+import { X, DollarSign, TrendingUp, BarChart3, Bell, Clock, Hash, HelpCircle, Globe, CheckCircle, XCircle, AlertTriangle, Brain } from 'lucide-react'
 import FAQSection from './FAQSection'
+import OllamaTeaching from './OllamaTeaching'
+import TradingCalendar from './TradingCalendar'
+import { getAccountBalance, getDailyTradeStatusRange, DailyTradeStatusRange } from '../api/tradingApi'
 
 // Helper function to check preset status
 function getPresetStatus(settings: ScannerSettings): {
-  float: 'good' | 'wont-work' | 'ok'
   gain: 'good' | 'wont-work' | 'ok'
   volume: 'good' | 'wont-work' | 'ok'
   displayCount: 'good' | 'wont-work' | 'ok'
@@ -13,9 +15,6 @@ function getPresetStatus(settings: ScannerSettings): {
   priceRange: 'good' | 'wont-work' | 'ok'
 } {
   return {
-    // Float filter - IBKR doesn't provide, so it won't work
-    float: 'wont-work',
-    
     // Gain filter - Good if 5%+, OK if 3-5%, Won't work if negative
     gain: settings.minGainPercent < 0 ? 'wont-work' : 
           settings.minGainPercent >= 5 ? 'good' : 
@@ -186,8 +185,11 @@ export function lockApi(apiName: 'yahoo' | 'serpapi' | 'alphavantage' | 'massive
 
 export default function SettingsPanel({ settings, onSettingsChange, onClose, isRateLimited = false, readyCountdown = 0 }: SettingsPanelProps) {
   const [localSettings, setLocalSettings] = useState(settings)
-  const [floatDisplayValue, setFloatDisplayValue] = useState(formatFloatHelper(settings.maxFloat))
-  const [activeTab, setActiveTab] = useState<'settings' | 'faq'>('settings')
+  const [activeTab, setActiveTab] = useState<'settings' | 'faq' | 'ai' | 'trading'>('settings')
+  const [accountBalance, setAccountBalance] = useState<number>(0)
+  const [dailyTradeBudget, setDailyTradeBudget] = useState<number>(0)
+  const [enabledDays, setEnabledDays] = useState<{ [date: string]: boolean }>({})
+  const [dailyTrades, setDailyTrades] = useState<{ [date: string]: { buyUsed: boolean; sellUsed: boolean } }>({})
   const [marketStatus, setMarketStatus] = useState(isMarketOpen())
   const [apiLockouts, setApiLockouts] = useState(getApiLockoutStatus())
   
@@ -200,6 +202,43 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
     
     return () => clearInterval(interval)
   }, [])
+  
+  // Load trading settings and data
+  useEffect(() => {
+    // Load trading settings from localStorage
+    const savedBudget = localStorage.getItem('dailyTradeBudget')
+    if (savedBudget) {
+      setDailyTradeBudget(parseFloat(savedBudget) || 0)
+    }
+    
+    const savedEnabledDays = localStorage.getItem('enabledDays')
+    if (savedEnabledDays) {
+      try {
+        setEnabledDays(JSON.parse(savedEnabledDays))
+      } catch (e) {
+        console.error('Error parsing enabledDays:', e)
+      }
+    }
+    
+    // Load account balance and daily trades
+    loadTradingData()
+    
+    // Refresh trading data every 30 seconds
+    const interval = setInterval(loadTradingData, 30000)
+    return () => clearInterval(interval)
+  }, [])
+  
+  const loadTradingData = async () => {
+    try {
+      const balance = await getAccountBalance()
+      setAccountBalance(balance)
+      
+      const trades = await getDailyTradeStatusRange()
+      setDailyTrades(trades)
+    } catch (error) {
+      console.error('Error loading trading data:', error)
+    }
+  }
   
   // Format time remaining until unlock (with seconds for countdown)
   const getTimeUntilUnlock = (unlockAt: number | null): string => {
@@ -260,30 +299,6 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
     }
   }, [localSettings.useYahoo, localSettings.useSerpAPI, localSettings.useAlphaVantage, localSettings.useMassive])
 
-  // Format number to K/M format
-  function formatFloatHelper(value: number): string {
-    if (value >= 1_000_000) {
-      const millions = value / 1_000_000
-      return millions % 1 === 0 ? `${millions}M` : `${millions.toFixed(1)}M`
-    } else if (value >= 1_000) {
-      const thousands = value / 1_000
-      return thousands % 1 === 0 ? `${thousands}K` : `${thousands.toFixed(1)}K`
-    }
-    return value.toString()
-  }
-
-  // Parse K/M format to number
-  const parseFloatValue = (value: string): number => {
-    const cleaned = value.trim().toUpperCase()
-    
-    if (cleaned.endsWith('M')) {
-      return parseFloat(cleaned.slice(0, -1)) * 1_000_000
-    } else if (cleaned.endsWith('K')) {
-      return parseFloat(cleaned.slice(0, -1)) * 1_000
-    }
-    
-    return parseFloat(cleaned) || 0
-  }
 
   const handleChange = (key: keyof ScannerSettings, value: any) => {
     const newSettings = { ...localSettings, [key]: value }
@@ -328,11 +343,6 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
     }
   }
 
-  const handleFloatChange = (value: string) => {
-    setFloatDisplayValue(value)
-    const numericValue = parseFloatValue(value)
-    handleChange('maxFloat', numericValue)
-  }
 
   const handleApply = () => {
     onSettingsChange(localSettings)
@@ -342,7 +352,6 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
     const pennySettings: ScannerSettings = {
       minPrice: 0.05, // $0.05 - penny stock minimum
       maxPrice: 1, // $1.00 - penny stock maximum
-      maxFloat: 100_000_000, // 100M shares - penny stocks have higher float
       minGainPercent: 10, // 10% - keep explosive movers
       volumeMultiplier: 5, // 5x - keep massive volume
       displayCount: 10, // Show all 10 tracked symbols
@@ -358,7 +367,6 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
       useMassive: localSettings.useMassive ?? false,
     }
     setLocalSettings(pennySettings)
-    setFloatDisplayValue(formatFloatHelper(pennySettings.maxFloat))
     onSettingsChange(pennySettings)
   }
 
@@ -366,7 +374,6 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
     const defaultSettings: ScannerSettings = {
       minPrice: 1,
       maxPrice: 6,
-      maxFloat: 10_000_000, // 10M shares - LOW-FLOAT for volatile stocks
       minGainPercent: 10, // 10% - only explosive movers
       volumeMultiplier: 4, // 4x - EXPLOSIVE volume only
       displayCount: 10, // Show all 10 tracked symbols
@@ -382,7 +389,6 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
       useMassive: localSettings.useMassive ?? false,
     }
     setLocalSettings(defaultSettings)
-    setFloatDisplayValue(formatFloatHelper(defaultSettings.maxFloat))
     onSettingsChange(defaultSettings)
   }
 
@@ -426,6 +432,20 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
           <HelpCircle className="w-4 h-4" />
           <span>Help & FAQ</span>
           {activeTab === 'faq' && (
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary"></div>
+          )}
+        </button>
+        <button
+          onClick={() => setActiveTab('ai')}
+          className={`flex items-center gap-2 px-4 py-2 font-medium transition-colors relative ${
+            activeTab === 'ai'
+              ? 'text-primary'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          <Brain className="w-4 h-4" />
+          <span>AI Training</span>
+          {activeTab === 'ai' && (
             <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary"></div>
           )}
         </button>
@@ -478,20 +498,6 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
             Stock Criteria
           </h3>
           <div className="space-y-3">
-            <div>
-              <InputField
-                label="Max Float (shares)"
-                type="text"
-                value={floatDisplayValue}
-                onChange={handleFloatChange}
-                helperText="Use M for millions, K for thousands (e.g., 10M, 500K)"
-                placeholder="e.g., 10M or 10000000"
-              />
-              <PresetStatusBadge 
-                status={getPresetStatus(localSettings).float} 
-                message={getPresetStatus(localSettings).float === 'good' ? "Float data from Massive.com (if available)" : "Float data from Massive.com only - may not be available for all stocks"}
-              />
-            </div>
             <InputField
               label="Minimum Gain %"
               type="number"
@@ -904,6 +910,50 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, isR
       {activeTab === 'faq' && (
         <div>
           <FAQSection />
+        </div>
+      )}
+
+      {/* AI/Ollama Tab Content */}
+      {activeTab === 'ai' && (
+        <div className="space-y-4">
+          <OllamaTeaching />
+          <div className="p-4 bg-muted/50 border border-border rounded-lg">
+            <h3 className="font-semibold text-foreground mb-2">About Pattern Teaching</h3>
+            <p className="text-sm text-muted-foreground mb-2">
+              Teaching Ollama all candlestick patterns improves AI analysis accuracy. The AI will learn:
+            </p>
+            <ul className="text-xs text-muted-foreground space-y-1 list-disc list-inside">
+              <li>36+ candlestick patterns (single, double, triple, four-candle)</li>
+              <li>Pattern reliability and confidence levels</li>
+              <li>Volume confirmation requirements</li>
+              <li>Trend context and support/resistance</li>
+              <li>Risk-reward calculation methods</li>
+            </ul>
+            <p className="text-xs text-muted-foreground mt-3">
+              <strong>Note:</strong> Teaching takes 30-60 seconds. Make sure Ollama is running before teaching.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Trading Calendar Tab Content */}
+      {activeTab === 'trading' && (
+        <div className="space-y-4">
+          <TradingCalendar
+            dailyTradeBudget={dailyTradeBudget}
+            onBudgetChange={(budget) => {
+              setDailyTradeBudget(budget)
+              localStorage.setItem('dailyTradeBudget', budget.toString())
+            }}
+            enabledDays={enabledDays}
+            onDayToggle={(date, enabled) => {
+              const newEnabledDays = { ...enabledDays, [date]: enabled }
+              setEnabledDays(newEnabledDays)
+              localStorage.setItem('enabledDays', JSON.stringify(newEnabledDays))
+            }}
+            dailyTrades={dailyTrades}
+            accountBalance={accountBalance}
+          />
         </div>
       )}
     </div>

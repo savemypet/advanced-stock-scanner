@@ -12,7 +12,6 @@ export const scanStocks = async (settings: ScannerSettings): Promise<ScanResult>
   console.log(`📡 [SCANNER API] Settings:`, {
     minPrice: settings.minPrice,
     maxPrice: settings.maxPrice,
-    maxFloat: settings.maxFloat,
     minGainPercent: settings.minGainPercent,
     volumeMultiplier: settings.volumeMultiplier,
     displayCount: settings.displayCount
@@ -20,10 +19,10 @@ export const scanStocks = async (settings: ScannerSettings): Promise<ScanResult>
   
   try {
     // IBKR only mode - use local backend (no rate limits)
-    // Increased timeout for IBKR scanner (can take 60-90 seconds for 5-10 stocks)
+    // Optimized timeout: 3 symbols × ~15s = ~45s, use 90s for safety
     console.log(`📡 [SCANNER API] Sending POST request to backend...`)
     const response = await axios.post(url, settings, {
-      timeout: 120000 // 120 seconds (2 minutes) - IBKR scanner needs time to process stocks
+      timeout: 90000 // 90 seconds (optimized for IBKR: 3 symbols, faster scan)
     })
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
     console.log(`✅ [SCANNER API] Response received in ${elapsed}s`)
@@ -47,6 +46,25 @@ export const scanStocks = async (settings: ScannerSettings): Promise<ScanResult>
     if (error.response) {
       console.error(`❌ [SCANNER API] Response status:`, error.response.status)
       console.error(`❌ [SCANNER API] Response data:`, error.response.data)
+      
+      // Handle IBKR connection errors (503 Service Unavailable)
+      if (error.response.status === 503 && error.response.data?.error) {
+        const errorDetails = error.response.data.details || {}
+        console.error(`❌ [SCANNER API] IBKR connection failed:`, error.response.data.error)
+        return {
+          success: false,
+          stocks: [],
+          apiStatus: {
+            ibkrConnected: false,
+            activeSource: 'Not Connected',
+            ibkrHost: errorDetails.ibkrHost || '127.0.0.1',
+            ibkrPort: errorDetails.ibkrPort || 4001,
+            ibkrAvailable: errorDetails.ibkrAvailable || false
+          },
+          error: error.response.data.error,
+          errorDetails: errorDetails
+        }
+      }
     }
     
     // IBKR only mode - no rate limit handling needed

@@ -73,7 +73,6 @@ export type ChartTimeframe = '1m' | '2m' | '3m' | '5m' | '15m' | '30m' | '90m' |
 export interface ScannerSettings {
   minPrice: number;
   maxPrice: number;
-  maxFloat: number;
   minGainPercent: number;
   volumeMultiplier: number;
   displayCount: number;
