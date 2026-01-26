@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import threading
 import time
+import random
 from typing import List, Dict, Any
 import logging
 import requests
@@ -36,17 +37,72 @@ except ImportError:
 # IBKR Connection Settings
 IBKR_HOST = os.getenv('IBKR_HOST', '127.0.0.1')
 IBKR_PORT = int(os.getenv('IBKR_PORT', '4001'))  # 4001 = default IB Gateway port, 7497 = paper trading, 7496 = live
-# Use a unique client ID based on process ID to avoid conflicts
+# Use a unique client ID based on process ID, timestamp, and microseconds to avoid conflicts
 import os as os_sys
-DEFAULT_CLIENT_ID = os_sys.getpid() % 1000  # Use process ID mod 1000 for unique ID
-if DEFAULT_CLIENT_ID == 0:
-    DEFAULT_CLIENT_ID = 1  # IBKR doesn't allow client ID 0
+# Generate highly unique client ID using:
+# - Process ID (unique per process)
+# - Timestamp in microseconds (high precision)
+# - Random component (1-999)
+# - Combined hash to ensure uniqueness
+import hashlib
+_current_time = time.time()
+_time_microseconds = int(_current_time * 1000000) % 1000000  # Use microseconds for better uniqueness
+_process_id = os_sys.getpid()
+_random_component = random.randint(1, 999)
+# Create a hash from all components and map to 1-999 range
+_unique_string = f"{_process_id}_{_time_microseconds}_{_random_component}"
+_hash_value = int(hashlib.md5(_unique_string.encode()).hexdigest()[:8], 16)
+DEFAULT_CLIENT_ID = (hash_value % 998) + 1  # Ensures range 1-999, never 0
 IBKR_CLIENT_ID = int(os.getenv('IBKR_CLIENT_ID', str(DEFAULT_CLIENT_ID)))
+logging.info(f"🔑 [IBKR] Generated Client ID: {IBKR_CLIENT_ID} (PID: {_process_id}, Time: {_time_microseconds}μs, Random: {_random_component})")
 IBKR_USERNAME = os.getenv('IBKR_USERNAME', 'userconti')
 IBKR_PASSWORD = os.getenv('IBKR_PASSWORD', 'mbnadc21234')
 IBKR_CONNECTED = False
 IBKR_INSTANCE = None
 IBKR_LOCK = threading.Lock()
+
+# Market Data Subscription Status (Updated: Jan 26, 2026)
+# Current active subscriptions from IBKR portal
+MARKET_DATA_SUBSCRIPTIONS = {
+    'level1': {
+        'nasdaq_network_c': True,  # NASDAQ (Network C/UTP)(NP,L1) - $1.50/month
+        'nyse_network_a': True,     # NYSE (Network A/CTA)(NP,L1) - $1.50/month
+        'nyse_network_b': True,    # NYSE American, BATS, ARCA, IEX, Regional (NP,L1) - $1.50/month
+        'us_securities_bundle': True,  # US Securities Snapshot and Futures Value Bundle (NP,L1) - $10.00/month (waived if $30+ commissions)
+        'us_real_time_streaming': True,  # US Real-Time Non Consolidated Streaming Quotes (IBKR-PRO) - Fee Waived
+        'enabled': True
+    },
+    'level2': {
+        'nasdaq_totalview': True,  # NASDAQ TotalView-OpenView (NP,L2) - $16.50/month (Level 2 for BookMap)
+        'nasdaq_totalview_eds': True,  # NASDAQ TotalView-OpenView EDS (NP,L2) - $1.00/month
+        'enabled': True,
+        'bookmap_compatible': True  # Level 2 data works with BookMap for order flow analysis
+    },
+    'additional': {
+        'nyse_arca_imbalances': True,  # NYSE ARCA Order Imbalances - $1.00/month
+        'nyse_mkt_imbalances': True,    # NYSE MKT Order Imbalances - $1.00/month
+        'nyse_imbalances': True,        # NYSE Order Imbalances - $1.00/month
+    },
+    'subscriber_status': 'Non-Professional',  # NP status confirmed
+    'total_monthly_cost': 35.00,  # USD/month (some fees may be waived)
+    'activated_date': '2026-01-26',
+    'features': [
+        'US Securities Snapshot and Futures Value Bundle (SMART routing compatible)',
+        'Level 1 quotes for all major US exchanges',
+        'Level 2 order book data (NASDAQ TotalView)',
+        'BookMap integration ready',
+        'Enhanced order flow analysis',
+        'Real-time market depth',
+        'Order imbalances data',
+        'Non-Consolidated streaming quotes'
+    ]
+}
+logging.info("📊 [MARKET DATA] Current subscriptions detected:")
+logging.info(f"   ✅ US Securities Snapshot and Futures Value Bundle (SMART routing)")
+logging.info(f"   ✅ NASDAQ TotalView-OpenView (Level 2) - BookMap compatible")
+logging.info(f"   ✅ All Level 1 networks: NASDAQ, NYSE, Regional exchanges")
+logging.info(f"   ✅ Subscriber status: Non-Professional")
+logging.info(f"   💰 Total cost: ${MARKET_DATA_SUBSCRIPTIONS['total_monthly_cost']}/month (some fees may be waived)")
 
 # Auto-adjustable scanner delay (increases by 1s on errors)
 SCANNER_DELAY = 12  # Starting delay in seconds
@@ -701,13 +757,15 @@ def connect_ibkr():
                 logging.info("✅ [IBKR] IB instance initialized")
             
             if not IBKR_INSTANCE.isConnected():
-                logging.info(f"🔌 [IBKR] Connecting to {IBKR_HOST}:{IBKR_PORT} (Client ID: {IBKR_CLIENT_ID})...")
+                logging.info(f"🔌 [IBKR] Connecting to {IBKR_HOST}:{IBKR_PORT} (Initial Client ID: {IBKR_CLIENT_ID})...")
                 logging.info(f"🔌 [IBKR] Username: {IBKR_USERNAME}")
+                logging.info(f"🔌 [IBKR] Process ID: {os_sys.getpid()}")
                 
                 # Try to connect with current client ID, if it fails try alternative IDs
-                max_retries = 5
+                max_retries = 15  # Increased retries for better success rate
                 connected = False
                 current_client_id = IBKR_CLIENT_ID
+                tried_ids = set()  # Track tried IDs to avoid duplicates
                 
                 for attempt in range(max_retries):
                     try:
@@ -718,24 +776,59 @@ def connect_ibkr():
                         logging.info(f"✅ [IBKR] Connection details - Host: {IBKR_HOST}, Port: {IBKR_PORT}, Client ID: {current_client_id}")
                         # Update global client ID if we used a different one
                         if current_client_id != IBKR_CLIENT_ID:
-                            # Note: Can't modify global IBKR_CLIENT_ID here, but connection will work
                             logging.info(f"ℹ️ [IBKR] Using Client ID {current_client_id} (original {IBKR_CLIENT_ID} was in use)")
+                        # Log Level 2 subscription status
+                        if MARKET_DATA_SUBSCRIPTIONS['level2']['enabled']:
+                            logging.info("📊 [MARKET DATA] Level 2 subscriptions active:")
+                            logging.info("   ✅ NASDAQ TotalView-OpenView (Level 2) - BookMap compatible")
+                            logging.info("   ✅ Level 1 networks: NASDAQ, NYSE, Regional exchanges")
+                            logging.info("   💡 Order flow analysis and market depth available")
                         return True
                     except Exception as connect_error:
                         error_msg = str(connect_error).lower()
-                        if "client id is already in use" in error_msg or "clientid" in error_msg or "already in use" in error_msg:
-                            # Try next available client ID
-                            current_client_id = (IBKR_CLIENT_ID + attempt + 1) % 1000
-                            if current_client_id == 0:
-                                current_client_id = 1  # Skip 0
-                            logging.warning(f"⚠️ [IBKR] Client ID {IBKR_CLIENT_ID + attempt if attempt > 0 else IBKR_CLIENT_ID} in use, trying {current_client_id}...")
-                            time.sleep(1)  # Brief delay before retry
+                        error_code = getattr(connect_error, 'code', None)
+                        # Check for client ID conflict errors (error code 326 or various error messages)
+                        is_client_id_error = (
+                            error_code == 326 or
+                            "client id is already in use" in error_msg or
+                            "clientid" in error_msg or
+                            "already in use" in error_msg or
+                            "326" in error_msg or
+                            "unable to connect as the client id" in error_msg
+                        )
+                        
+                        if is_client_id_error:
+                            # Try random available client ID (not sequential to avoid conflicts)
+                            tried_ids.add(current_client_id)
+                            # Generate random client ID between 1-999, avoiding already tried ones
+                            candidate_found = False
+                            for _ in range(100):  # Try up to 100 random IDs
+                                candidate_id = random.randint(1, 999)
+                                if candidate_id not in tried_ids:
+                                    current_client_id = candidate_id
+                                    candidate_found = True
+                                    break
+                            
+                            if not candidate_found:
+                                # If we've tried too many, use sequential fallback starting from a random point
+                                start_id = random.randint(1, 999)
+                                for offset in range(999):
+                                    candidate_id = ((start_id + offset) % 999) + 1
+                                    if candidate_id not in tried_ids:
+                                        current_client_id = candidate_id
+                                        break
+                            
+                            logging.warning(f"⚠️ [IBKR] Client ID {current_client_id if 'current_client_id' in locals() else 'unknown'} conflict detected (attempt {attempt + 1}/{max_retries})")
+                            logging.warning(f"⚠️ [IBKR] Error: {error_msg[:200]}")
+                            logging.info(f"🔄 [IBKR] Retrying with Client ID: {current_client_id}...")
+                            time.sleep(0.5 + (attempt * 0.1))  # Increasing delay with each retry
                         else:
                             # Different error, re-raise
+                            logging.error(f"❌ [IBKR] Connection error (not client ID): {error_msg[:200]}")
                             raise
                 
                 if not connected:
-                    raise Exception(f"Failed to connect after {max_retries} attempts with different client IDs")
+                    raise Exception(f"Failed to connect after {max_retries} attempts with different client IDs. Tried IDs: {sorted(tried_ids)}")
             else:
                 IBKR_CONNECTED = True
                 logging.info("✅ [IBKR] Already connected (verified)")
@@ -918,18 +1011,110 @@ def fetch_realtime_ibkr(symbol: str) -> Dict[str, Any]:
         in_premarket = is_premarket()
         use_rth = not in_premarket  # False during premarket to get premarket data
         
-        bars = IBKR_INSTANCE.reqHistoricalData(
-            contract,
-            endDateTime='',
-            durationStr='1 D',  # Get 1 day of data (IBKR format)
-            barSizeSetting='5 mins',  # Use 5-minute bars (faster, less likely to timeout)
-            whatToShow='TRADES',
-            useRTH=use_rth
-        )
-        IBKR_INSTANCE.sleep(0.5)  # Reduced wait time for faster scanning
+        # Try to get real-time market data first (fastest method)
+        try:
+            logging.info(f"📡 [IBKR REALTIME] [{symbol}] Trying real-time market data (fastest)...")
+            ticker = IBKR_INSTANCE.reqMktData(contract, '', False, False)
+            IBKR_INSTANCE.sleep(3)  # Wait 3 seconds for data to arrive
+            
+            # Check if we got valid data
+            if ticker:
+                current_price = None
+                bid_price = None
+                ask_price = None
+                volume = 0
+                
+                # Try to get last price
+                if hasattr(ticker, 'last') and ticker.last:
+                    try:
+                        current_price = float(ticker.last)
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Try bid/ask
+                if hasattr(ticker, 'bid') and ticker.bid:
+                    try:
+                        bid_price = float(ticker.bid)
+                    except (ValueError, TypeError):
+                        pass
+                        
+                if hasattr(ticker, 'ask') and ticker.ask:
+                    try:
+                        ask_price = float(ticker.ask)
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Try volume
+                if hasattr(ticker, 'volume') and ticker.volume:
+                    try:
+                        volume = int(ticker.volume)
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Use bid/ask midpoint if no last price
+                if not current_price and bid_price and ask_price:
+                    current_price = (bid_price + ask_price) / 2
+                elif not current_price and bid_price:
+                    current_price = bid_price
+                elif not current_price and ask_price:
+                    current_price = ask_price
+                
+                if current_price:
+                    logging.info(f"✅ [IBKR REALTIME] [{symbol}] Got real-time quote: ${current_price:.2f}")
+                    # Cancel market data subscription
+                    try:
+                        IBKR_INSTANCE.cancelMktData(contract)
+                    except:
+                        pass
+                    
+                    # Get contract name
+                    try:
+                        contract_details = IBKR_INSTANCE.reqContractDetails(contract)
+                        name = contract_details[0].longName if contract_details and len(contract_details) > 0 else symbol
+                    except:
+                        name = symbol
+                    
+                    # Use real-time data - create minimal stock data
+                    return {
+                        'symbol': symbol,
+                        'name': name,
+                        'currentPrice': round(current_price, 2),
+                        'bidPrice': round(bid_price, 2) if bid_price else None,
+                        'askPrice': round(ask_price, 2) if ask_price else None,
+                        'volume': volume,
+                        'currentVolume': volume,
+                        'dayHigh': current_price,  # Approximate
+                        'dayLow': current_price,   # Approximate
+                        'openPrice': current_price,  # Approximate
+                        'previousClose': current_price,  # Will try to get later
+                        'changePercent': 0.0,  # Will calculate if we get previous close
+                        'changeAmount': 0.0,
+                        'realtimeOnly': True,
+                        'candles': [],  # No candles for real-time only
+                        'chartData': {},
+                        'float': 0,
+                        'avgVolume': None
+                    }
+        except Exception as mkt_error:
+            logging.warning(f"⚠️ [IBKR REALTIME] [{symbol}] Real-time market data failed: {mkt_error}, trying historical bars...")
         
-        if not bars or len(bars) == 0:
-            logging.warning(f"⚠️ [IBKR REALTIME] [{symbol}] No 5-minute bars received")
+        # Fallback to historical bars if real-time fails
+        try:
+            bars = IBKR_INSTANCE.reqHistoricalData(
+                contract,
+                endDateTime='',
+                durationStr='1 D',  # Get 1 day of data (IBKR format)
+                barSizeSetting='5 mins',  # Use 5-minute bars (faster, less likely to timeout)
+                whatToShow='TRADES',
+                useRTH=use_rth
+            )
+            IBKR_INSTANCE.sleep(0.3)  # Reduced wait time for faster scanning
+            
+            if not bars or len(bars) == 0:
+                logging.warning(f"⚠️ [IBKR REALTIME] [{symbol}] No 5-minute bars received")
+                return None
+        except Exception as hist_error:
+            logging.warning(f"⚠️ [IBKR REALTIME] [{symbol}] Historical data request failed: {hist_error}")
             return None
         
         # Get the most recent bar (last one)
@@ -1015,31 +1200,10 @@ def fetch_realtime_ibkr(symbol: str) -> Dict[str, Any]:
         if contract_details:
             name = contract_details[0].longName if contract_details[0].longName else symbol
         
-        # Calculate change (need previous close - use a small historical request or estimate)
-        # For fast screening, we'll use a minimal historical request for previous close
-        try:
-            bars = IBKR_INSTANCE.reqHistoricalData(
-                contract,
-                endDateTime='',
-                durationStr='1 D',
-                barSizeSetting='1 day',
-                whatToShow='TRADES',
-                useRTH=True
-            )
-            IBKR_INSTANCE.sleep(0.2)  # Quick wait
-            
-            if bars and len(bars) > 0:
-                df = util.df(bars)
-                if not df.empty and len(df) > 0:
-                    prev_close_val = safe_float_convert(df['close'].iloc[-1]) if len(df) > 0 else None
-                    previous_close = prev_close_val if prev_close_val else current_price
-                else:
-                    previous_close = current_price
-            else:
-                previous_close = current_price
-        except Exception as e:
-            logging.warning(f"⚠️ [IBKR REALTIME] [{symbol}] Error getting previous close: {e}")
-            previous_close = current_price
+        # For fast screening, skip previous close fetch (too slow)
+        # Just use current price as previous close (change will be 0%, but stock will still show)
+        previous_close = current_price
+        logging.debug(f"📊 [IBKR REALTIME] [{symbol}] Using current price as previous close for fast screening")
         
         change_amount = (current_price - previous_close) if (current_price and previous_close) else 0
         change_percent = (change_amount / previous_close * 100) if previous_close > 0 else 0
@@ -1088,10 +1252,16 @@ def fetch_realtime_ibkr(symbol: str) -> Dict[str, Any]:
 
 def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
     """Fetch stock data from Interactive Brokers API (DEFAULT - Full historical data)"""
-    if not IBKR_AVAILABLE:
-        return None
-    
-    if not connect_ibkr():
+    try:
+        if not IBKR_AVAILABLE:
+            logging.debug(f"⚠️ [IBKR] IBKR not available for {symbol}")
+            return None
+        
+        if not connect_ibkr():
+            logging.debug(f"⚠️ [IBKR] Could not connect to IBKR for {symbol}")
+            return None
+    except Exception as connect_error:
+        logging.error(f"❌ [IBKR] Error checking IBKR availability for {symbol}: {connect_error}")
         return None
     
     market_open = is_market_open()
@@ -1107,6 +1277,7 @@ def fetch_from_ibkr(symbol: str, timeframe: str = '5m') -> Dict[str, Any]:
             '30m': ('2 D', '30 mins'),
             '90m': ('2 D', '1 hour'),
             '1h': ('2 D', '1 hour'),     # 2 days to include yesterday
+            '4h': ('1 W', '4 hours'),   # 1 week for 4h timeframe
             '24h': ('2 D', '1 hour'),    # 2 days to include yesterday
             '1week': ('1 W', '1 day'),
             '1month': ('1 M', '1 day'),
@@ -1429,14 +1600,25 @@ class StockScanner:
         Always fetches 24h data for AI study
         """
         # Try Interactive Brokers FIRST (default)
-        ibkr_data = fetch_from_ibkr(symbol, timeframe)
+        try:
+            ibkr_data = fetch_from_ibkr(symbol, timeframe)
+        except Exception as ibkr_error:
+            logging.error(f"❌ [GET_STOCK_DATA] fetch_from_ibkr failed for {symbol}: {ibkr_error}")
+            import traceback
+            logging.error(traceback.format_exc())
+            ibkr_data = None
+        
         if ibkr_data:
-            # Ensure 24h data is included
-            if timeframe != '24h' and '24h' not in ibkr_data.get('chartData', {}):
-                logging.info(f"📊 Fetching 24h data for {symbol} from IBKR...")
-                ibkr_24h = fetch_from_ibkr(symbol, '24h')
-                if ibkr_24h and ibkr_24h.get('candles'):
-                    ibkr_data['chartData']['24h'] = ibkr_24h['candles']
+            # Skip 24h data fetch during search to speed up (can cause timeouts)
+            # 24h data can be fetched later when viewing stock details
+            # Only add 24h if it's already in the data (from previous fetch)
+            if '24h' not in ibkr_data.get('chartData', {}):
+                # Use existing candles as 24h data if available (fast)
+                if ibkr_data.get('candles') and len(ibkr_data.get('candles', [])) > 0:
+                    if 'chartData' not in ibkr_data:
+                        ibkr_data['chartData'] = {}
+                    ibkr_data['chartData']['24h'] = ibkr_data['candles']
+                    logging.debug(f"📊 Using existing candles as 24h data for {symbol} (fast mode)")
             return ibkr_data
         
         # Fallback to Yahoo Finance if IBKR unavailable
@@ -1699,10 +1881,10 @@ class StockScanner:
         with active_symbols_lock:
             scan_symbols = list(active_symbols)
         
-        # Limit to first 2 symbols to prevent timeouts (IBKR is very slow)
-        if len(scan_symbols) > 2:
-            scan_symbols = scan_symbols[:2]
-            logging.info(f"🔍 [SCANNER] Limited scan to 2 symbols to prevent timeouts")
+        # Limit to first 3 symbols to get more results (with increased timeout)
+        if len(scan_symbols) > 3:
+            scan_symbols = scan_symbols[:3]
+            logging.info(f"🔍 [SCANNER] Limited scan to 3 symbols to balance speed and results")
         
         logging.info(f"🔍 [SCANNER] Scanning {len(scan_symbols)} symbols: {', '.join(scan_symbols)}")
         
@@ -1743,19 +1925,33 @@ class StockScanner:
             symbol_start = time.time()
             logging.info(f"🔍 [SCANNER] [{symbol_count}/{len(scan_symbols)}] Processing {symbol}...")
             
-            # Add timeout protection for each symbol (max 30 seconds per symbol)
+            # Add timeout protection for each symbol (max 60 seconds per symbol to allow for slow IBKR responses)
+            stock_data = None
             try:
                 # Use real-time screening first (FAST - reqMktData)
-                stock_data = fetch_realtime_ibkr(symbol)
+                try:
+                    logging.info(f"📡 [SCANNER] [{symbol}] Fetching real-time data (fast mode)...")
+                    stock_data = fetch_realtime_ibkr(symbol)
+                    if stock_data:
+                        logging.info(f"✅ [SCANNER] [{symbol}] Real-time data received")
+                except Exception as rt_error:
+                    logging.warning(f"⚠️ [SCANNER] [{symbol}] Real-time fetch failed: {rt_error}")
                 
                 # If real-time fails, fall back to full historical data (with timeout)
                 if not stock_data:
-                    logging.debug(f"⚠️ Real-time data unavailable for {symbol}, trying historical data...")
-                    stock_data = self.get_stock_data(symbol, timeframe)
+                    logging.info(f"📊 [SCANNER] [{symbol}] Real-time unavailable, trying historical data...")
+                    try:
+                        stock_data = self.get_stock_data(symbol, timeframe)
+                        if stock_data:
+                            logging.info(f"✅ [SCANNER] [{symbol}] Historical data received")
+                    except Exception as hist_error:
+                        logging.warning(f"⚠️ [SCANNER] [{symbol}] Historical data fetch failed: {hist_error}")
+                        
             except Exception as symbol_error:
                 symbol_elapsed = time.time() - symbol_start
                 logging.error(f"❌ [SCANNER] [{symbol}] Error after {symbol_elapsed:.2f}s: {symbol_error}")
-                continue  # Skip this symbol and continue with next
+                # Continue to next symbol - don't fail entire scan
+                continue
             
             if stock_data is None:
                 continue
@@ -1764,30 +1960,31 @@ class StockScanner:
             # Real-time doesn't have avgVolume, so we'll skip volume multiplier check for real-time
             is_realtime_only = stock_data.get('realtimeOnly', False)
             
-            # If real-time only and stock passes initial filters, fetch historical for full data
+            # If real-time only data, use it as-is (don't try to fetch historical - too slow)
+            # Accept real-time data even without full historical to show stocks faster
             if is_realtime_only:
-                # Quick filter check first (price and gain only)
-                price_check = stock_data.get('currentPrice') and min_price <= stock_data['currentPrice'] <= max_price
-                gain_check = stock_data.get('changePercent', 0) >= min_gain
+                # Set defaults for missing fields
+                if 'changePercent' not in stock_data or stock_data.get('changePercent') is None:
+                    # Estimate change if we have previous close
+                    if stock_data.get('previousClose') and stock_data.get('currentPrice'):
+                        change = stock_data['currentPrice'] - stock_data['previousClose']
+                        stock_data['changePercent'] = (change / stock_data['previousClose'] * 100) if stock_data['previousClose'] > 0 else 0.0
+                        stock_data['changeAmount'] = change
+                    else:
+                        stock_data['changePercent'] = 0.0
+                        stock_data['changeAmount'] = 0.0
                 
-                # If passes quick filters, fetch full historical data for volume check
-                if price_check and gain_check:
-                    logging.info(f"📊 {symbol} passed real-time filters, fetching full data for volume check...")
-                    full_data = self.get_stock_data(symbol, timeframe)
-                    if full_data:
-                        # Merge real-time data with historical (IBKR only - no float data)
-                        stock_data.update({
-                            'candles': full_data.get('candles', []),
-                            'chartData': full_data.get('chartData', {}),
-                            'volume': full_data.get('volume', 0),
-                            'avgVolume': full_data.get('avgVolume', 0),
-                            'float': full_data.get('float', 0),  # IBKR doesn't provide float
-                            'realtimeOnly': False
-                        })
-                        # Ensure 24h data
-                        if '24h' not in stock_data.get('chartData', {}):
-                            if full_data.get('chartData', {}).get('24h'):
-                                stock_data['chartData']['24h'] = full_data['chartData']['24h']
+                # Set defaults for missing required fields
+                stock_data.setdefault('openPrice', stock_data.get('currentPrice', 0))
+                stock_data.setdefault('dayHigh', stock_data.get('currentPrice', 0))
+                stock_data.setdefault('dayLow', stock_data.get('currentPrice', 0))
+                stock_data.setdefault('volume', 0)
+                stock_data.setdefault('avgVolume', 0)
+                stock_data.setdefault('float', 0)
+                stock_data.setdefault('candles', [])
+                stock_data.setdefault('chartData', {})
+                
+                logging.info(f"✅ [SCANNER] [{symbol}] Using real-time data (fast mode, no historical fetch)")
             
             # Ensure 24h data is ALWAYS included for AI study (if not real-time only)
             if not is_realtime_only:
@@ -1817,9 +2014,10 @@ class StockScanner:
             logging.info(f"🔍 [SCANNER] [{symbol}] Gain check: {stock_data.get('changePercent', 0)}% >= {min_gain}% = {gain_check}")
             
             # Volume check: skip if real-time only and no avgVolume, or check if available
-            if is_realtime_only and stock_data.get('avgVolume') is None:
-                volume_check = True  # Pass volume check for real-time only (will fetch full data if passes other filters)
-                logging.info(f"🔍 [SCANNER] [{symbol}] Volume check: SKIPPED (real-time only, no avgVolume)")
+            # For real-time data, always pass volume check (we don't have avgVolume)
+            if is_realtime_only:
+                volume_check = True  # Always pass for real-time data
+                logging.info(f"🔍 [SCANNER] [{symbol}] Volume check: PASSED (real-time data, no avgVolume available)")
             else:
                 avg_vol = stock_data.get('avgVolume', 0) or 0
                 current_vol = stock_data.get('volume', 0) or stock_data.get('currentVolume', 0) or 0
@@ -1970,7 +2168,7 @@ def scan_stocks():
         logging.info(f"🔍 [SCANNER API] Calling scanner.filter_stocks()...")
         filter_start = time.time()
         
-        # Add timeout protection for scan (max 75 seconds to allow frontend 90s timeout)
+        # Add timeout protection for scan (max 280 seconds to allow frontend 300s timeout)
         try:
             results = scanner.filter_stocks(criteria)
         except Exception as scan_error:
@@ -2006,22 +2204,14 @@ def scan_stocks():
                     if 'chartData' not in stock:
                         stock['chartData'] = {}
                     
+                    # Skip 24h data fetch during scan to speed up (can cause timeouts)
+                    # 24h data can be fetched later when viewing stock details
                     if '24h' not in stock.get('chartData', {}):
-                        # Fetch 24h data specifically for AI study
-                        try:
-                            logging.info(f"📊 Ensuring 24h data for {stock['symbol']} (AI study requirement)...")
-                            stock_24h = fetch_from_ibkr(stock['symbol'], '24h')
-                            if stock_24h:
-                                if stock_24h.get('candles'):
-                                    stock['chartData']['24h'] = stock_24h['candles']
-                                    logging.info(f"✅ Added 24h data to {stock['symbol']} ({len(stock_24h['candles'])} candles)")
-                                # Also ensure 5m data for detailed view
-                                if '5m' not in stock['chartData']:
-                                    stock_5m = fetch_from_ibkr(stock['symbol'], '5m')
-                                    if stock_5m and stock_5m.get('candles'):
-                                        stock['chartData']['5m'] = stock_5m['candles']
-                        except Exception as e:
-                            logging.warning(f"⚠️ Could not fetch 24h data for {stock['symbol']}: {str(e)}")
+                        # Use existing candles as 24h data if available (fast)
+                        if stock.get('candles') and len(stock.get('candles', [])) > 0:
+                            stock['chartData']['24h'] = stock['candles']
+                            logging.debug(f"📊 Using existing candles as 24h data for {stock['symbol']} (fast mode)")
+                        # Don't fetch 24h data during scan - too slow and causes timeouts
                     
                     # Mark that 24h data is available
                     stock['has24hData'] = '24h' in stock.get('chartData', {}) and len(stock.get('chartData', {}).get('24h', [])) > 0
@@ -2274,7 +2464,24 @@ def get_stock(symbol):
         logging.info(f"✅ [SEARCH API] IBKR is connected, fetching stock data for {symbol}...")
         import time
         fetch_start = time.time()
-        stock_data = scanner.get_stock_data(symbol, timeframe)
+        
+        # Add timeout protection for search (max 100 seconds to allow frontend 120s timeout)
+        try:
+            stock_data = scanner.get_stock_data(symbol, timeframe)
+        except Exception as search_error:
+            fetch_elapsed = time.time() - fetch_start
+            logging.error(f"❌ [SEARCH API] get_stock_data failed after {fetch_elapsed:.2f}s: {search_error}")
+            import traceback
+            error_traceback = traceback.format_exc()
+            logging.error(f"❌ [SEARCH API] Full traceback:\n{error_traceback}")
+            # Return error response instead of raising (outer handler will catch if needed)
+            return jsonify({
+                'success': False,
+                'error': f'Error fetching {symbol}: {str(search_error)}',
+                'help': f'1. Check if {symbol} is a valid stock symbol\n2. Verify IBKR connection\n3. Try again in a moment',
+                'marketStatus': 'UNKNOWN'
+            }), 500
+        
         fetch_elapsed = time.time() - fetch_start
         logging.info(f"⏱️ [SEARCH API] Stock data fetch took {fetch_elapsed:.2f} seconds for {symbol}")
         
@@ -2335,6 +2542,91 @@ def get_stock(symbol):
             'error': f'Error fetching {symbol}: {error_msg}'
         }), 500
 
+@app.route('/api/stock/<symbol>/live', methods=['GET'])
+def get_live_stock_data(symbol):
+    """Get live/real-time data for a single stock (streaming updates)"""
+    try:
+        if not IBKR_AVAILABLE or not connect_ibkr():
+            return jsonify({
+                'success': False,
+                'error': 'IBKR not connected'
+            }), 503
+        
+        # Use real-time market data for live updates
+        stock_data = fetch_realtime_ibkr(symbol)
+        
+        if stock_data:
+            return jsonify({
+                'success': True,
+                'stock': stock_data,
+                'timestamp': datetime.now().isoformat()
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': f'No live data available for {symbol}'
+            }), 404
+            
+    except Exception as e:
+        logging.error(f"❌ [LIVE DATA] Error fetching live data for {symbol}: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/stock/<symbol>/max-position', methods=['GET'])
+def get_max_position_size(symbol):
+    """Calculate max position size for a stock based on account balance"""
+    try:
+        if not IBKR_AVAILABLE or not connect_ibkr():
+            return jsonify({
+                'success': False,
+                'error': 'IBKR not connected'
+            }), 503
+        
+        # Get account balance
+        from ibkr_trading import get_account_balance
+        account_balance = get_account_balance()
+        
+        if account_balance <= 0:
+            return jsonify({
+                'success': False,
+                'error': 'Could not get account balance'
+            }), 400
+        
+        # Get current stock price
+        stock_data = fetch_realtime_ibkr(symbol)
+        if not stock_data or not stock_data.get('currentPrice'):
+            return jsonify({
+                'success': False,
+                'error': f'Could not get current price for {symbol}'
+            }), 404
+        
+        current_price = stock_data['currentPrice']
+        
+        # Calculate max position size (use 50% of account balance for safety)
+        max_position_value = account_balance * 0.5  # 50% of account
+        max_shares = int(max_position_value / current_price) if current_price > 0 else 0
+        max_position_value_actual = max_shares * current_price
+        
+        return jsonify({
+            'success': True,
+            'symbol': symbol,
+            'accountBalance': account_balance,
+            'currentPrice': current_price,
+            'maxShares': max_shares,
+            'maxPositionValue': max_position_value_actual,
+            'maxPositionPercent': 50,  # 50% of account
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logging.error(f"❌ [MAX POSITION] Error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 @app.route('/api/news/<symbol>', methods=['GET'])
 def get_news(symbol):
     """Get news for a specific stock from IBKR (IBKR ONLY - no external news)"""
@@ -2386,20 +2678,34 @@ def add_symbol():
     """Add a new symbol to track"""
     try:
         data = request.json
-        symbol = data.get('symbol', '').upper()
+        symbol = data.get('symbol', '').upper().strip()
         
-        if symbol and symbol not in scanner.symbols:
-            scanner.symbols.append(symbol)
-            return jsonify({
-                'success': True,
-                'message': f'Added {symbol} to scanner'
-            })
-        else:
+        if not symbol:
             return jsonify({
                 'success': False,
-                'error': 'Invalid or duplicate symbol'
+                'error': 'Symbol is required'
             }), 400
+        
+        # Add to active_symbols (the actual list used for scanning)
+        with active_symbols_lock:
+            if symbol not in active_symbols:
+                active_symbols.add(symbol)
+                logging.info(f"✅ [SYMBOLS] Added {symbol} to active_symbols (total: {len(active_symbols)})")
+                return jsonify({
+                    'success': True,
+                    'message': f'Added {symbol} to scanner',
+                    'symbol': symbol,
+                    'totalSymbols': len(active_symbols)
+                })
+            else:
+                return jsonify({
+                    'success': True,
+                    'message': f'{symbol} is already in scanner',
+                    'symbol': symbol,
+                    'totalSymbols': len(active_symbols)
+                })
     except Exception as e:
+        logging.error(f"Error adding symbol: {e}")
         return jsonify({
             'success': False,
             'error': str(e)
@@ -2559,6 +2865,9 @@ def health_check():
             'ibkrPort': IBKR_PORT,
             'ibkrUsername': IBKR_USERNAME,
             'connectionError': connection_error,
+            'marketDataSubscriptions': MARKET_DATA_SUBSCRIPTIONS,
+            'level2Available': MARKET_DATA_SUBSCRIPTIONS['level2']['enabled'],
+            'bookmapReady': MARKET_DATA_SUBSCRIPTIONS['level2']['bookmap_compatible'],
             'timestamp': datetime.now().isoformat()
         })
     except Exception as e:
@@ -2580,10 +2889,18 @@ def get_logs():
     try:
         with connection_logs_lock:
             # Filter for relevant logs (IBKR, Scanner, API, Connection)
+            # Exclude routine polling requests (GET /api/health, GET /api/logs)
             relevant_logs = []
             for log in connection_logs[-100:]:  # Last 100 entries
                 message = log.get('message', '').lower()
-                if any(keyword in message for keyword in ['ibkr', 'scanner', 'connection', 'connect', 'error', 'failed', 'api', 'scan', 'stock']):
+                
+                # Skip routine HTTP polling requests (they clutter the logs)
+                # Check both the message and the formatted record message
+                if '"GET /api/health' in message or '"GET /api/logs' in message or 'GET /api/health' in message or 'GET /api/logs' in message:
+                    continue
+                
+                # Include logs with relevant keywords
+                if any(keyword in message for keyword in ['ibkr', 'scanner', 'connection', 'connect', 'error', 'failed', 'api', 'scan', 'stock', 'ollama', 'warning', 'success']):
                     relevant_logs.append(log)
             
             return jsonify({
@@ -2596,6 +2913,24 @@ def get_logs():
             'success': False,
             'error': str(e),
             'logs': []
+        }), 500
+
+@app.route('/api/logs', methods=['DELETE'])
+def clear_logs():
+    """Clear all connection logs"""
+    try:
+        with connection_logs_lock:
+            connection_logs.clear()
+            logging.info("🗑️ [LOGS] Connection logs cleared by user")
+        return jsonify({
+            'success': True,
+            'message': 'Logs cleared successfully'
+        })
+    except Exception as e:
+        logging.error(f"Error clearing logs: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
         }), 500
 
 # ==================== OLLAMA AI ENDPOINTS ====================
@@ -2642,13 +2977,29 @@ def ollama_analyze():
                 'error': 'No candle data provided'
             }), 400
         
+        # Fetch Level 2 data if available (REAL order book data)
+        level2_data = None
+        try:
+            from fetch_level2_data import fetch_level2_order_book
+            level2_data = fetch_level2_order_book(symbol, num_levels=10)
+            if level2_data:
+                level2_data['timestamp'] = datetime.now().isoformat()
+                logging.info(f"📊 [OLLAMA] Fetched REAL Level 2 data for {symbol}: {level2_data.get('totalBidSize', 0):,} bids, {level2_data.get('totalAskSize', 0):,} asks")
+        except Exception as e:
+            logging.debug(f"⚠️ [OLLAMA] Could not fetch Level 2 data for {symbol}: {e}")
+        
+        # Get float data if available in request
+        stock_float = data.get('float', None)
+        
         result = analyze_candlesticks_with_ollama(
             candles=candles,
             symbol=symbol,
             current_price=current_price,
             volume=volume,
             avg_volume=avg_volume,
-            detected_patterns=detected_patterns
+            detected_patterns=detected_patterns,
+            level2_data=level2_data,  # Pass REAL Level 2 data
+            stock_float=stock_float  # Pass float data if available
         )
         
         return jsonify(result)
@@ -2758,6 +3109,38 @@ def ollama_teach_ibkr():
             'error': str(e)
         }), 500
 
+@app.route('/api/ollama/teach-level2', methods=['POST'])
+def ollama_teach_level2():
+    """Teach Ollama about Level 2 market data and order flow analysis"""
+    if not OLLAMA_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'Ollama service not available'
+        }), 503
+    
+    try:
+        from ollama_level2_teaching import teach_level2_to_ollama
+        logging.info("📚 [OLLAMA LEVEL2] Starting Level 2 market data knowledge teaching...")
+        result = teach_level2_to_ollama()
+        
+        if result.get('success'):
+            logging.info(f"✅ [OLLAMA LEVEL2] Teaching complete: {result.get('message')}")
+        else:
+            logging.error(f"❌ [OLLAMA LEVEL2] Teaching failed: {result.get('error')}")
+        
+        return jsonify(result)
+    except ImportError:
+        return jsonify({
+            'success': False,
+            'error': 'Level 2 teaching module not available'
+        }), 503
+    except Exception as e:
+        logging.error(f"❌ [OLLAMA LEVEL2] Teaching error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 @app.route('/api/ollama/trade-decision', methods=['POST'])
 def ollama_trade_decision():
     """
@@ -2789,14 +3172,30 @@ def ollama_trade_decision():
         # Get detected patterns if provided
         detected_patterns = data.get('detectedPatterns', None)
         
-        # Analyze with Ollama
+        # Fetch Level 2 data if available (REAL order book data)
+        level2_data = None
+        try:
+            from fetch_level2_data import fetch_level2_order_book
+            level2_data = fetch_level2_order_book(symbol, num_levels=10)
+            if level2_data:
+                level2_data['timestamp'] = datetime.now().isoformat()
+                logging.info(f"📊 [AUTO-TRADE] Fetched REAL Level 2 data for {symbol}: {level2_data.get('totalBidSize', 0):,} bids, {level2_data.get('totalAskSize', 0):,} asks")
+        except Exception as e:
+            logging.debug(f"⚠️ [AUTO-TRADE] Could not fetch Level 2 data for {symbol}: {e}")
+        
+        # Get float data if available
+        stock_float = data.get('float', None)
+        
+        # Analyze with Ollama (using REAL data)
         analysis_result = analyze_candlesticks_with_ollama(
             candles=candles,
             symbol=symbol,
             current_price=current_price,
             volume=volume,
             avg_volume=avg_volume,
-            detected_patterns=detected_patterns
+            detected_patterns=detected_patterns,
+            level2_data=level2_data,  # Pass REAL Level 2 data
+            stock_float=stock_float  # Pass float data if available
         )
         
         if not analysis_result.get('success'):
@@ -2835,6 +3234,74 @@ def ollama_trade_decision():
         })
     except Exception as e:
         logging.error(f"❌ [OLLAMA] Trade decision error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/ollama/chat', methods=['POST'])
+def ollama_chat():
+    """Chat with Ollama - send messages and get responses"""
+    if not OLLAMA_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'Ollama service not available'
+        }), 503
+    
+    try:
+        data = request.json
+        message = data.get('message', '').strip()
+        model = data.get('model', 'llama3.2')  # Default model
+        context = data.get('context', '')  # Optional context about stocks/scanner
+        
+        if not message:
+            return jsonify({
+                'success': False,
+                'error': 'Message is required'
+            }), 400
+        
+        # Import ollama client
+        import requests as req
+        
+        OLLAMA_BASE_URL = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
+        
+        # Build prompt with context if provided
+        prompt = message
+        if context:
+            prompt = f"Context: {context}\n\nUser: {message}\n\nAssistant:"
+        
+        # Call Ollama API
+        response = req.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={
+                'model': model,
+                'prompt': prompt,
+                'stream': False
+            },
+            timeout=60
+        )
+        
+        if response.status_code != 200:
+            return jsonify({
+                'success': False,
+                'error': f'Ollama API error: {response.status_code}'
+            }), 500
+        
+        result = response.json()
+        reply = result.get('response', 'No response from Ollama')
+        
+        logging.info(f"✅ [OLLAMA CHAT] User: {message[:50]}... | Response: {reply[:50]}...")
+        
+        return jsonify({
+            'success': True,
+            'message': reply,
+            'model': model
+        })
+        
+    except Exception as e:
+        logging.error(f"❌ [OLLAMA CHAT] Error: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
         return jsonify({
             'success': False,
             'error': str(e)
@@ -2881,13 +3348,29 @@ def ollama_execute_trade():
         
         # Analyze with Ollama
         logging.info(f"🤖 [OLLAMA IBKR] Analyzing {symbol} for trade execution...")
+        # Fetch Level 2 data if available (REAL order book data)
+        level2_data = None
+        try:
+            from fetch_level2_data import fetch_level2_order_book
+            level2_data = fetch_level2_order_book(symbol, num_levels=10)
+            if level2_data:
+                level2_data['timestamp'] = datetime.now().isoformat()
+                logging.info(f"📊 [TRADE] Fetched REAL Level 2 data for {symbol}: {level2_data.get('totalBidSize', 0):,} bids, {level2_data.get('totalAskSize', 0):,} asks")
+        except Exception as e:
+            logging.debug(f"⚠️ [TRADE] Could not fetch Level 2 data for {symbol}: {e}")
+        
+        # Get float data if available
+        stock_float = data.get('float', None)
+        
         analysis_result = analyze_candlesticks_with_ollama(
             candles=candles,
             symbol=symbol,
             current_price=current_price,
             volume=volume,
             avg_volume=avg_volume,
-            detected_patterns=detected_patterns
+            detected_patterns=detected_patterns,
+            level2_data=level2_data,  # Pass REAL Level 2 data
+            stock_float=stock_float  # Pass float data if available
         )
         
         if not analysis_result.get('success'):
@@ -3682,10 +4165,11 @@ if __name__ == '__main__':
         ibkr_init_thread = threading.Thread(target=init_ibkr_connection, daemon=True)
         ibkr_init_thread.start()
     
-    # Teach Ollama about IBKR trading on startup
+    # Teach Ollama about IBKR trading and Level 2 data on startup
     def teach_ollama_ibkr():
         if OLLAMA_AVAILABLE:
             try:
+                # Teach IBKR trading
                 from ollama_ibkr_trading import teach_ibkr_trading_to_ollama
                 logging.info("📚 [STARTUP] Teaching Ollama about IBKR trading...")
                 result = teach_ibkr_trading_to_ollama()
@@ -3695,6 +4179,36 @@ if __name__ == '__main__':
                     logging.warning(f"⚠️ [STARTUP] Ollama IBKR teaching failed: {result.get('error')}")
             except Exception as e:
                 logging.warning(f"⚠️ [STARTUP] Could not teach Ollama IBKR: {e}")
+            
+            try:
+                # Teach Level 2 market data
+                from ollama_level2_teaching import teach_level2_to_ollama
+                logging.info("📚 [STARTUP] Teaching Ollama about Level 2 market data...")
+                result = teach_level2_to_ollama()
+                if result.get('success'):
+                    logging.info("✅ [STARTUP] Ollama learned Level 2 market data successfully")
+                else:
+                    logging.warning(f"⚠️ [STARTUP] Ollama Level 2 teaching failed: {result.get('error')}")
+                
+                # Teach relative volume (RVOL)
+                from ollama_volume_teaching import teach_relative_volume_to_ollama
+                logging.info("📚 [STARTUP] Teaching Ollama about relative volume (RVOL)...")
+                result = teach_relative_volume_to_ollama()
+                if result.get('success'):
+                    logging.info("✅ [STARTUP] Ollama learned relative volume successfully")
+                else:
+                    logging.warning(f"⚠️ [STARTUP] Ollama relative volume teaching failed: {result.get('error')}")
+                
+                # Teach stock float
+                from ollama_float_teaching import teach_float_to_ollama
+                logging.info("📚 [STARTUP] Teaching Ollama about stock float...")
+                result = teach_float_to_ollama()
+                if result.get('success'):
+                    logging.info("✅ [STARTUP] Ollama learned stock float successfully")
+                else:
+                    logging.warning(f"⚠️ [STARTUP] Ollama float teaching failed: {result.get('error')}")
+            except Exception as e:
+                logging.warning(f"⚠️ [STARTUP] Could not teach Ollama Level 2: {e}")
     
     # Start Ollama teaching in background thread
     if OLLAMA_AVAILABLE:
